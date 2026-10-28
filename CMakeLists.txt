@@ -15,18 +15,56 @@ FetchContent_Declare(miniz
     URL_HASH SHA256=27d99216e9127d1678085639f3059f6907a02c044e8a38392a39f96163ddbbf0
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(miniz)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_Install OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(json
+    URL https://codeload.github.com/nlohmann/json/tar.gz/65ee68451d8eb2b5f3a30b410476ab83deb3289b
+    URL_HASH SHA256=13ef31d691947940a08909f8e0772f1d7d68e5da1678ee812a49c4bb0c996b2f
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_Declare(plum
+    URL https://codeload.github.com/aaaaaa123456789/libplum/tar.gz/89414559c9a8ecccd4fd1ffd2a31c440662c9dd2
+    URL_HASH SHA256=9b9421a2c7a638e76af55e6e4ba4174261231dff4502dd6fe153712356f85783
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(json plum)
+file(GLOB plumSources CONFIGURE_DEPENDS "${plum_SOURCE_DIR}/src/*.c")
+if(MSVC)
+    # MSVC C17 omits array-parameter qualifiers and max_align_t.
+    file(GLOB_RECURSE plumInputs RELATIVE "${plum_SOURCE_DIR}"
+        "${plum_SOURCE_DIR}/src/*.c" "${plum_SOURCE_DIR}/src/*.h" "${plum_SOURCE_DIR}/header/*.h")
+    foreach(input IN LISTS plumInputs)
+        file(READ "${plum_SOURCE_DIR}/${input}" content)
+        string(REGEX REPLACE "\\[(restrict |static )+" "[" content "${content}")
+        get_filename_component(directory "${plum_BINARY_DIR}/msvc/${input}" DIRECTORY)
+        file(MAKE_DIRECTORY "${directory}")
+        file(CONFIGURE OUTPUT "${plum_BINARY_DIR}/msvc/${input}" CONTENT "${content}" @ONLY)
+    endforeach()
+    file(GLOB plumSources "${plum_BINARY_DIR}/msvc/src/*.c")
+endif()
+add_library(plum STATIC ${plumSources})
+set_target_properties(plum PROPERTIES C_STANDARD 17 C_STANDARD_REQUIRED ON)
+target_compile_definitions(plum PRIVATE PLUM_DEBUG _CRT_SECURE_NO_WARNINGS)
+target_include_directories(plum PUBLIC "${plum_SOURCE_DIR}/header")
+if(MSVC)
+    target_compile_options(plum PRIVATE /O1 /GL)
+    math(EXPR heapAlignment "${CMAKE_SIZEOF_VOID_P} * 2")
+    file(CONFIGURE OUTPUT "${plum_BINARY_DIR}/memoryCompatibility.h" CONTENT
+        "#include <stdlib.h>\n#include <setjmp.h>\ntypedef struct { _Alignas(@heapAlignment@) char data[@heapAlignment@]; } plum_max_align_t;\n#define max_align_t plum_max_align_t\n_Static_assert(_Alignof(jmp_buf) <= @heapAlignment@, \"Unsupported jump buffer alignment\");\n#define aligned_alloc(alignment, size) malloc(size)\n" @ONLY)
+    target_compile_options(plum PRIVATE "/FI${plum_BINARY_DIR}/memoryCompatibility.h")
+endif()
 add_executable(OpenTypingPet WIN32
     src/main.cpp src/appController.cpp src/presetLoader.cpp src/petEngine.cpp
-    src/inputSource.cpp src/appSettings.cpp src/appResources.rc)
+    src/inputSource.cpp src/appSettings.cpp src/animationDecoder.cpp src/characterManifest.cpp src/appResources.rc)
 target_compile_definitions(OpenTypingPet PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 if(MSVC)
     target_compile_options(OpenTypingPet PRIVATE /W4 /utf-8 $<$<CONFIG:Release>:/O1> $<$<CONFIG:Release>:/GL>)
     target_link_options(OpenTypingPet PRIVATE $<$<CONFIG:Release>:/LTCG> /OPT:REF /OPT:ICF "/MANIFESTUAC:level='asInvoker' uiAccess='false'")
 endif()
-target_link_libraries(OpenTypingPet PRIVATE miniz user32 gdi32 gdiplus comctl32 shell32 shlwapi
+target_link_libraries(OpenTypingPet PRIVATE miniz plum nlohmann_json::nlohmann_json user32 gdi32 gdiplus comctl32 shell32 shlwapi
     ole32 uuid advapi32 bcrypt dwmapi uxtheme wtsapi32)
 set_target_properties(OpenTypingPet PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 install(TARGETS OpenTypingPet RUNTIME DESTINATION .)
 install(FILES LICENSE DESTINATION licenses RENAME OpenTypingPet.txt)
 install(FILES "${miniz_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME miniz.txt)
 install(FILES assets/LUCIDE-LICENSE DESTINATION licenses RENAME Lucide.txt)
+install(FILES "${plum_SOURCE_DIR}/LICENSE" DESTINATION licenses RENAME libplum.txt)
+install(FILES "${json_SOURCE_DIR}/LICENSE.MIT" DESTINATION licenses RENAME nlohmannJson.txt)

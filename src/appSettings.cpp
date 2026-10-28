@@ -49,6 +49,8 @@ void Preferences::load() {
       ERROR_SUCCESS)
     return;
   presetPath = readText(key, L"presetPath");
+  initialized = readBool(key, L"initialized", !presetPath.empty());
+  showSettingsOnStart = readBool(key, L"showSettingsOnStart", false);
   width = std::clamp(readInt(key, L"width", 280), 100, 800);
   idleDelay = std::clamp(readInt(key, L"idleDelay", 800), 200, 5000);
   minimumHold = std::clamp(readInt(key, L"minimumHold", 0), 0, 500);
@@ -83,6 +85,8 @@ void Preferences::save() const {
                       nullptr, &key, nullptr) != ERROR_SUCCESS)
     return;
   writeText(key, L"presetPath", presetPath);
+  writeText(key, L"initialized", initialized ? L"true" : L"false");
+  writeText(key, L"showSettingsOnStart", showSettingsOnStart ? L"true" : L"false");
   writeInt(key, L"width", width);
   writeInt(key, L"idleDelay", idleDelay);
   writeInt(key, L"minimumHold", minimumHold);
@@ -109,25 +113,60 @@ ThemeColors themeColors(int mode) {
   const bool dark = mode == 2 || (mode == 0 && !light);
   if (dark)
     return {true,
-            RGB(29, 31, 32),
-            RGB(37, 40, 41),
-            RGB(33, 37, 36),
-            RGB(236, 240, 237),
-            RGB(177, 188, 181),
-            RGB(69, 77, 72),
-            RGB(117, 210, 178),
-            RGB(48, 78, 65),
-            RGB(47, 53, 50),
-            RGB(255, 171, 156)};
+            RGB(28, 29, 32),
+            RGB(34, 35, 39),
+            RGB(24, 25, 28),
+            RGB(238, 239, 242),
+            RGB(164, 169, 179),
+            RGB(57, 60, 67),
+            RGB(110, 211, 190),
+            RGB(39, 67, 63),
+            RGB(45, 47, 53),
+            RGB(249, 145, 158)};
   return {false,
-          RGB(250, 251, 252),
+          RGB(250, 250, 252),
           RGB(255, 255, 255),
-          RGB(238, 242, 240),
-          RGB(38, 51, 45),
-          RGB(101, 115, 107),
-          RGB(218, 226, 221),
-          RGB(8, 127, 115),
-          RGB(226, 240, 233),
-          RGB(239, 243, 241),
+          RGB(243, 245, 248),
+          RGB(37, 40, 46),
+          RGB(102, 108, 119),
+          RGB(220, 224, 231),
+          RGB(0, 119, 105),
+          RGB(222, 241, 236),
+          RGB(237, 240, 245),
           RGB(164, 66, 51)};
+}
+bool loginStartupEnabled() {
+  HKEY key = nullptr;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                     0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+    return false;
+  const bool enabled = !readText(key, L"OpenTypingPet").empty();
+  RegCloseKey(key);
+  return enabled;
+}
+bool setLoginStartup(bool enabled) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                       0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
+    return false;
+  LSTATUS result;
+  if (enabled) {
+    std::wstring path(32768, L'\0');
+    const auto size = GetModuleFileNameW(nullptr, path.data(), DWORD(path.size()));
+    if (!size || size >= path.size()) {
+      RegCloseKey(key);
+      return false;
+    }
+    path.resize(size);
+    const auto command = L"\"" + path + L"\" --autostart";
+    result = RegSetValueExW(key, L"OpenTypingPet", 0, REG_SZ,
+                            reinterpret_cast<const BYTE *>(command.c_str()),
+                            DWORD((command.size() + 1) * sizeof(wchar_t)));
+  } else {
+    result = RegDeleteValueW(key, L"OpenTypingPet");
+    if (result == ERROR_FILE_NOT_FOUND)
+      result = ERROR_SUCCESS;
+  }
+  RegCloseKey(key);
+  return result == ERROR_SUCCESS;
 }

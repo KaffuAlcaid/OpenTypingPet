@@ -13,6 +13,19 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   INITCOMMONCONTROLSEX controls{sizeof(controls),
                                 ICC_STANDARD_CLASSES | ICC_BAR_CLASSES};
   InitCommonControlsEx(&controls);
+  int count = 0;
+  LPWSTR *arguments = CommandLineToArgvW(GetCommandLineW(), &count);
+  std::wstring initial;
+  bool automatic = false;
+  if (arguments) {
+    for (int i = 1; i < count; ++i)
+      if (std::wstring_view(arguments[i]) == L"--autostart" ||
+          std::wstring_view(arguments[i]) == L"--background")
+        automatic = true;
+      else if (initial.empty())
+        initial = arguments[i];
+    LocalFree(arguments);
+  }
   HANDLE single = CreateMutexW(nullptr, TRUE, L"Local\\OpenTypingPet.SingleInstance");
   if (!single) {
     Gdiplus::GdiplusShutdown(graphicsToken);
@@ -21,9 +34,23 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   }
   if (GetLastError() == ERROR_ALREADY_EXISTS ||
       FindWindowW(nullptr, L"OpenTypingPet")) {
-    MessageBoxW(nullptr,
-                L"OpenTypingPet 已在运行。请从系统托盘打开设置。",
-                L"OpenTypingPet", MB_OK | MB_ICONINFORMATION);
+    if (!automatic || !initial.empty()) {
+      HWND window = nullptr;
+      for (int attempt = 0; attempt < 50 && !window; ++attempt) {
+        window = FindWindowW(L"OpenTypingPetSettings", nullptr);
+        if (!window)
+          Sleep(20);
+      }
+      if (window) {
+        DWORD owner = 0;
+        GetWindowThreadProcessId(window, &owner);
+        AllowSetForegroundWindow(owner);
+        COPYDATASTRUCT data{0x4F545050, DWORD((initial.size() + 1) * sizeof(wchar_t)), initial.data()};
+        DWORD_PTR result = 0;
+        SendMessageTimeoutW(window, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&data),
+                             SMTO_ABORTIFHUNG | SMTO_BLOCK, 2000, &result);
+      }
+    }
     if (single)
       CloseHandle(single);
     Gdiplus::GdiplusShutdown(graphicsToken);
@@ -34,12 +61,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   {
     AppController app(instance);
     if (app.initialize()) {
-      int count = 0;
-      LPWSTR *arguments = CommandLineToArgvW(GetCommandLineW(), &count);
-      const std::wstring initial = count > 1 ? arguments[1] : L"";
-      if (arguments)
-        LocalFree(arguments);
-      app.openSettings();
+      if (!app.preferences().initialized || !initial.empty() ||
+          app.preferences().showSettingsOnStart)
+        app.openSettings();
       app.restore(initial);
       MSG message{};
       while (GetMessageW(&message, nullptr, 0, 0) > 0) {

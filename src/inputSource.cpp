@@ -69,25 +69,26 @@ void InputSource::keyEvent(int key, bool down, bool mouse) {
   const int mod = modifier(key);
   const bool repeated = m_pressed.contains(key),
              solo = !down && m_unusedModifiers.contains(key);
+  if (!down && !repeated)
+    return;
   if (down) {
     m_pressed.insert(key);
     if (mod) {
       if (!repeated)
         m_unusedModifiers.insert(key);
-      return;
-    }
-    m_unusedModifiers.clear();
+    } else
+      m_unusedModifiers.clear();
   } else {
     m_pressed.erase(key);
     m_unusedModifiers.erase(key);
-    if (!solo || !mod)
-      return;
-    key = mod;
   }
   if (input)
-    input(key, held(VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
-          held(VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
-          held(VK_MENU, VK_LMENU, VK_RMENU), down && repeated, mouse);
+    input({mouse ? (down ? InputEventType::MouseDown : InputEventType::MouseUp)
+                 : (down ? InputEventType::KeyDown : InputEventType::KeyUp),
+           mod ? mod : key,
+           mod != VK_SHIFT && held(VK_SHIFT, VK_LSHIFT, VK_RSHIFT),
+           mod != VK_CONTROL && held(VK_CONTROL, VK_LCONTROL, VK_RCONTROL),
+           mod != VK_MENU && held(VK_MENU, VK_LMENU, VK_RMENU), down && repeated, solo});
 }
 void InputSource::readInput(HRAWINPUT handle) {
   if (!m_enabled)

@@ -43,6 +43,8 @@ private:
                                    DWORD_PTR);
   static LRESULT CALLBACK listProc(HWND, UINT, WPARAM, LPARAM, UINT_PTR,
                                    DWORD_PTR);
+  static LRESULT CALLBACK sliderProc(HWND, UINT, WPARAM, LPARAM, UINT_PTR, DWORD_PTR);
+  void paintSlider(HWND window, HDC dc);
   void paintScrollBar(HWND window, HDC dc = nullptr);
   LRESULT message(UINT, WPARAM, LPARAM);
   void createControls();
@@ -63,6 +65,10 @@ private:
   void updateTray(bool add = false);
   void paintButton(const DRAWITEMSTRUCT &draw);
   void paintAction(const DRAWITEMSTRUCT &draw);
+  void paintPreview(HDC dc);
+  void selectPreview(size_t action);
+  void invalidatePreview();
+  void updateTooltips();
   void paintMenu(const DRAWITEMSTRUCT &draw);
   HMENU createMenu();
   void icon(Gdiplus::Graphics &graphics, int id, Gdiplus::Rect rect,
@@ -74,12 +80,14 @@ private:
   bool m_interactive = true, m_busy = false, m_paused = false,
        m_dragging = false, m_quitting = false, m_syncing = false;
   HWND m_settingsWindow = nullptr, m_petWindow = nullptr;
+  HWND m_tooltips = nullptr;
   Preferences m_preferences;
   ThemeColors m_colors{};
   PetEngine m_engine;
   InputSource m_input;
   std::thread m_worker;
   std::map<unsigned, HWND> m_controls;
+  std::map<unsigned, std::wstring> m_tooltipText;
   std::map<int, std::shared_ptr<Gdiplus::Bitmap>> m_icons;
   std::vector<MenuItem> m_menuItems;
   HFONT m_font = nullptr, m_headingFont = nullptr, m_titleFont = nullptr;
@@ -91,6 +99,11 @@ private:
   size_t m_frame = 0;
   int m_loops = 0;
   uint64_t m_frameAt = 0;
+  size_t m_previewAction = 0, m_previewFrame = 0;
+  unsigned m_previewLoops = 0;
+  uint64_t m_previewAt = 0;
+  bool m_previewPlaying = true, m_loginStartup = false;
+  int m_previewBackground = 0;
   POINT m_dragOrigin{}, m_cursorOrigin{};
   std::wstring m_error;
   HDC m_petDC = nullptr;

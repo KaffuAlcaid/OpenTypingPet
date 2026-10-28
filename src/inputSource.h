@@ -1,4 +1,5 @@
 #pragma once
+#include "characterDefinition.h"
 #include <cstdint>
 #include <functional>
 #include <set>
@@ -7,7 +8,7 @@ class InputSource {
 public:
   InputSource();
   ~InputSource();
-  std::function<void(int, bool, bool, bool, bool, bool)> input;
+  std::function<void(const InputEvent &)> input;
   std::function<void()> sessionChanged;
   bool setEnabled(bool enabled, bool mouse);
   void clear();

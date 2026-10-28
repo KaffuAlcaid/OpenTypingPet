@@ -20,9 +20,9 @@ enum : unsigned {
   Settings,
   Topmost,
   Locked,
-  TabDisplay = 1010,
-  TabPlayback,
+  TabPet = 1010,
   TabActions,
+  TabApp,
   ThemeSystem = 1020,
   ThemeLight,
   ThemeDark,
@@ -39,7 +39,13 @@ enum : unsigned {
   HoldEdit,
   HoldMinus,
   HoldPlus,
-  Actions = 1050
+  Actions = 1050,
+  StartSettings,
+  LoginStartup,
+  PreviewPlay,
+  PreviewChecker = 1060,
+  PreviewLight,
+  PreviewDark
 };
 constexpr UINT Imported = WM_APP + 1, TrayEvent = WM_APP + 2;
 constexpr UINT_PTR AnimationTimer = 1;
@@ -89,12 +95,12 @@ std::shared_ptr<Gdiplus::Bitmap> resourceImage(HINSTANCE instance, int id) {
 AppController::AppController(HINSTANCE instance, bool interactive)
     : m_instance(instance), m_interactive(interactive) {
   m_preferences.load();
+  m_loginStartup = loginStartupEnabled();
   m_colors = themeColors(m_preferences.theme);
   m_engine.setTiming(m_preferences.idleDelay, m_preferences.minimumHold);
   m_engine.changed = [this] { onAction(); };
-  m_input.input = [this](int key, bool shift, bool ctrl, bool alt, bool repeat,
-                         bool mouse) {
-    m_engine.input(key, shift, ctrl, alt, repeat, mouse);
+  m_input.input = [this](const InputEvent &event) {
+    m_engine.handleEvent(event);
     schedule();
   };
   m_input.sessionChanged = [this] { m_engine.reset(); };
@@ -140,7 +146,7 @@ bool AppController::initialize() {
   cls.hIconSm = cls.hIcon;
   cls.lpszClassName = L"OpenTypingPetSettings";
   RegisterClassExW(&cls);
-  RECT rect{0, 0, px(900), px(670)};
+  RECT rect{0, 0, px(920), px(620)};
   AdjustWindowRectExForDpi(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0, m_dpi);
   m_settingsWindow = CreateWindowExW(
       0, cls.lpszClassName, L"OpenTypingPet",
@@ -189,93 +195,118 @@ HWND AppController::control(const wchar_t *type, const wchar_t *label,
 }
 void AppController::createControls() {
   for (auto entry : std::vector<std::pair<unsigned, const wchar_t *>>{
-           {Open, L"导入预设"},
-           {Pause, L""},
-           {Reset, L"重置位置"},
-           {Topmost, L"始终置顶"},
-           {Locked, L"锁定位置 / 鼠标穿透"},
-           {TabDisplay, L"显示"},
-           {TabPlayback, L"播放"},
-           {TabActions, L"动作"},
-           {ThemeSystem, L"跟随系统"},
-           {ThemeLight, L"亮色"},
-           {ThemeDark, L"深色"},
-           {PixelMode, L"像素"},
-           {SmoothMode, L"平滑"},
-           {WidthMinus, L"−"},
-           {WidthPlus, L"+"},
-           {IdleMinus, L"−"},
-           {IdlePlus, L"+"},
-           {HoldMinus, L"−"},
-           {HoldPlus, L"+"}})
+           {Open, L"导入角色包"}, {Pause, L"暂停响应"}, {Reset, L"重置位置"},
+           {Topmost, L"始终置顶"}, {Locked, L"锁定并穿透鼠标"},
+           {TabPet, L"桌宠"}, {TabActions, L"动作"}, {TabApp, L"应用"},
+           {ThemeSystem, L"跟随系统"}, {ThemeLight, L"浅色"}, {ThemeDark, L"深色"},
+           {PixelMode, L"像素"}, {SmoothMode, L"平滑"},
+           {WidthMinus, L"−"}, {WidthPlus, L"+"}, {IdleMinus, L"−"}, {IdlePlus, L"+"},
+           {HoldMinus, L"−"}, {HoldPlus, L"+"},
+           {StartSettings, L"启动时打开设置"}, {LoginStartup, L"登录 Windows 后启动"},
+           {PreviewPlay, L"暂停预览"}, {PreviewChecker, L"透明网格"},
+           {PreviewLight, L"浅色背景"}, {PreviewDark, L"深色背景"}})
     control(WC_BUTTONW, entry.second, entry.first, BS_OWNERDRAW | BS_NOTIFY);
   for (auto id : {WidthEdit, IdleEdit, HoldEdit}) {
-    auto window = control(WC_EDITW, L"", id,
-                          ES_CENTER | ES_NUMBER | WS_BORDER | WS_TABSTOP);
+    auto window = control(WC_EDITW, L"", id, ES_CENTER | ES_NUMBER | WS_BORDER);
     SendMessageW(window, EM_SETLIMITTEXT, 5, 0);
     SetWindowSubclass(window, editProc, id, reinterpret_cast<DWORD_PTR>(this));
     SetWindowTheme(window, L"", L"");
   }
   for (auto id : {WidthSlider, OpacitySlider}) {
     auto window = control(TRACKBAR_CLASSW, L"", id, TBS_NOTICKS | TBS_HORZ);
+    SetWindowTheme(window, L"", L"");
     SendMessageW(window, TBM_SETRANGEMIN, FALSE, id == WidthSlider ? 100 : 20);
     SendMessageW(window, TBM_SETRANGEMAX, FALSE, id == WidthSlider ? 800 : 100);
     SendMessageW(window, TBM_SETPAGESIZE, 0, 10);
+    SetWindowSubclass(window, sliderProc, id, reinterpret_cast<DWORD_PTR>(this));
   }
   control(WC_LISTBOXW, L"", Actions,
-          LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY |
-              LBS_NOINTEGRALHEIGHT | WS_VSCROLL);
-  SetWindowSubclass(m_controls[Actions], listProc, Actions,
-                    reinterpret_cast<DWORD_PTR>(this));
+          LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL);
+  SetWindowSubclass(m_controls[Actions], listProc, Actions, reinterpret_cast<DWORD_PTR>(this));
+  m_tooltips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr,
+                               WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                               CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                               m_settingsWindow, nullptr, m_instance, nullptr);
+  updateTooltips();
+}
+void AppController::updateTooltips() {
+  if (!m_tooltips)
+    return;
+  const std::map<unsigned, std::wstring> tips = {
+      {Pause, m_paused ? L"继续响应输入" : L"暂停响应输入"},
+      {PreviewPlay, m_previewPlaying ? L"暂停预览" : L"播放预览"},
+      {PreviewChecker, L"透明网格"}, {PreviewLight, L"浅色背景"}, {PreviewDark, L"深色背景"},
+      {WidthMinus, L"减小宽度"}, {WidthPlus, L"增大宽度"},
+      {IdleMinus, L"缩短待机延迟"}, {IdlePlus, L"延长待机延迟"},
+      {HoldMinus, L"缩短动作保持"}, {HoldPlus, L"延长动作保持"}};
+  for (const auto &[id, tip] : tips) {
+    const bool exists = m_tooltipText.contains(id);
+    m_tooltipText[id] = tip;
+    TOOLINFOW tool{sizeof(tool)};
+    tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    tool.hwnd = m_settingsWindow;
+    tool.uId = reinterpret_cast<UINT_PTR>(m_controls[id]);
+    tool.lpszText = m_tooltipText[id].data();
+    SendMessageW(m_tooltips, exists ? TTM_UPDATETIPTEXTW : TTM_ADDTOOLW, 0,
+                   reinterpret_cast<LPARAM>(&tool));
+    if (id == Pause || id == PreviewPlay || (id >= PreviewChecker && id <= PreviewDark))
+      SetWindowTextW(m_controls[id], tip.c_str());
+  }
 }
 void AppController::layout() {
   if (m_controls.empty())
     return;
   RECT rect{};
   GetClientRect(m_settingsWindow, &rect);
-  const int w = MulDiv(rect.right, 96, m_dpi),
-            h = MulDiv(rect.bottom, 96, m_dpi);
-  const int left = 288, right = w - 24, span = right - left;
+  const int w = MulDiv(rect.right, 96, m_dpi), h = MulDiv(rect.bottom, 96, m_dpi);
+  const int left = 176, right = w - 288, span = right - left, preview = w - 264;
   auto place = [&](unsigned id, int x, int y, int width, int height) {
     MoveWindow(m_controls[id], px(x), px(y), px(width), px(height), TRUE);
   };
-  place(Open, w - 174, 16, 116, 36);
-  place(Pause, w - 50, 16, 34, 36);
-  place(Reset, 22, h - 80, 220, 38);
+  place(Open, w - 202, 22, 136, 34);
+  place(Pause, w - 58, 22, 34, 34);
   for (int i = 0; i < 3; ++i)
-    place(TabDisplay + i, left + i * 96, 88, 96, 40);
-  const int themeX = std::max(left + 90, right - 252);
+    place(TabPet + i, 12, 92 + i * 48, 128, 40);
+  place(Topmost, left, 158, span, 34);
+  place(Locked, left, 204, span, 34);
+  place(WidthSlider, left + 68, 300, span - 208, 34);
+  place(WidthMinus, right - 132, 300, 30, 34);
+  place(WidthEdit, right - 102, 300, 72, 34);
+  place(WidthPlus, right - 30, 300, 30, 34);
+  place(OpacitySlider, left + 68, 352, span - 128, 34);
+  place(PixelMode, left + 68, 404, 80, 34);
+  place(SmoothMode, left + 152, 404, 80, 34);
+  place(Reset, left, 474, 132, 34);
+  place(Actions, left, 94, span, h - 300);
+  SendMessageW(m_controls[Actions], LB_SETITEMHEIGHT, 0, px(64));
+  place(IdleMinus, right - 154, h - 150, 30, 34);
+  place(IdleEdit, right - 124, h - 150, 64, 34);
+  place(IdlePlus, right - 60, h - 150, 30, 34);
+  place(HoldMinus, right - 154, h - 102, 30, 34);
+  place(HoldEdit, right - 124, h - 102, 64, 34);
+  place(HoldPlus, right - 60, h - 102, 30, 34);
   for (int i = 0; i < 3; ++i)
-    place(ThemeSystem + i, themeX + i * 84, 148, 84, 34);
-  place(Topmost, left, 220, span, 32);
-  place(Locked, left, 262, span, 32);
-  place(WidthSlider, left + 84, 340, std::max(32, span - 242), 36);
-  place(WidthMinus, right - 140, 340, 34, 36);
-  place(WidthEdit, right - 106, 340, 72, 36);
-  place(WidthPlus, right - 34, 340, 34, 36);
-  place(OpacitySlider, left + 84, 388, std::max(32, span - 160), 34);
-  place(PixelMode, left + 84, 436, 88, 34);
-  place(SmoothMode, left + 180, 436, 88, 34);
-  place(IdleMinus, right - 190, 190, 34, 36);
-  place(IdleEdit, right - 156, 190, 86, 36);
-  place(IdlePlus, right - 70, 190, 34, 36);
-  place(HoldMinus, right - 190, 250, 34, 36);
-  place(HoldEdit, right - 156, 250, 86, 36);
-  place(HoldPlus, right - 70, 250, 34, 36);
-  place(Actions, left, 148, span, std::max(50, h - 204));
-  SendMessageW(m_controls[Actions], LB_SETITEMHEIGHT, 0, px(76));
+    place(ThemeSystem + i, w - 294 + i * 90, 134, 86, 34);
+  place(StartSettings, left, 250, w - left - 24, 36);
+  place(LoginStartup, left, 300, w - left - 24, 36);
+  for (int i = 0; i < 3; ++i)
+    place(PreviewChecker + i, preview + 52 + i * 36, 470, 28, 28);
+  place(PreviewPlay, preview + 96, 516, 32, 32);
   for (auto [id, window] : m_controls) {
     bool visible = true;
-    if ((id >= ThemeSystem && id <= SmoothMode) || id == Topmost ||
-        id == Locked)
+    if (id == Topmost || id == Locked || id == Reset ||
+        (id >= WidthSlider && id <= SmoothMode))
       visible = m_tab == 0;
-    if (id >= IdleEdit && id <= HoldPlus)
+    if (id == Actions || id == PreviewPlay || (id >= IdleEdit && id <= HoldPlus))
       visible = m_tab == 1;
-    if (id == Actions)
+    if ((id >= ThemeSystem && id <= ThemeDark) || id == StartSettings || id == LoginStartup)
       visible = m_tab == 2;
+    if (id >= PreviewChecker && id <= PreviewDark)
+      visible = m_tab != 2;
     ShowWindow(window, visible ? SW_SHOWNA : SW_HIDE);
   }
   InvalidateRect(m_settingsWindow, nullptr, FALSE);
+  schedule();
 }
 void AppController::syncControls() {
   if (m_controls.empty())
@@ -293,6 +324,10 @@ void AppController::syncControls() {
   EnableWindow(m_controls[Open], !m_busy);
   EnableWindow(m_controls[Pause], m_engine.character() != nullptr);
   EnableWindow(m_controls[Reset], m_engine.character() != nullptr);
+  EnableWindow(m_controls[PreviewPlay], m_engine.character() != nullptr);
+  if (const auto character = m_engine.character(); character && m_previewAction < character->actions.size())
+    EnableWindow(m_controls[PreviewPlay], character->animation(m_previewAction).frames.size() > 1);
+  updateTooltips();
   for (auto [id, window] : m_controls)
     InvalidateRect(window, nullptr, TRUE);
   m_syncing = false;
@@ -315,14 +350,19 @@ void AppController::applyTheme() {
   };
   m_font = makeFont(14, FW_NORMAL);
   m_headingFont = makeFont(16, FW_SEMIBOLD);
-  m_titleFont = makeFont(21, FW_SEMIBOLD);
+  m_titleFont = makeFont(22, FW_SEMIBOLD);
   for (auto [id, window] : m_controls)
     SendMessageW(window, WM_SETFONT, reinterpret_cast<WPARAM>(m_font), TRUE);
   BOOL dark = m_colors.dark;
   DwmSetWindowAttribute(m_settingsWindow, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark,
                         sizeof(dark));
+  if (m_tooltips) {
+    SetWindowTheme(m_tooltips, L"", L"");
+    SendMessageW(m_tooltips, TTM_SETTIPBKCOLOR, m_colors.base, 0);
+    SendMessageW(m_tooltips, TTM_SETTIPTEXTCOLOR, m_colors.text, 0);
+  }
   RedrawWindow(m_settingsWindow, nullptr, nullptr,
-               RDW_INVALIDATE | RDW_ALLCHILDREN);
+               RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 void AppController::changeTheme(int mode) {
   m_preferences.theme = std::clamp(mode, 0, 2);
@@ -374,143 +414,182 @@ void AppController::paintSettings(HDC dc) {
   RECT client{};
   GetClientRect(m_settingsWindow, &client);
   const int w = client.right, h = client.bottom;
+  const int left = px(176), right = w - px(288);
   fill(dc, client, m_colors.window);
-  fill(dc, {0, 0, w, px(68)}, m_colors.base);
-  fill(dc, {0, px(68), px(264), h - px(36)}, m_colors.panel);
-  fill(dc, {0, h - px(36), w, h}, m_colors.base);
-  fill(dc, {0, px(67), w, px(68)}, m_colors.border);
-  fill(dc, {px(263), px(68), px(264), h - px(36)}, m_colors.border);
-  fill(dc, {0, h - px(37), w, h - px(36)}, m_colors.border);
+  fill(dc, {0, 0, px(152), h}, m_colors.panel);
+  fill(dc, {px(151), 0, px(152), h}, m_colors.border);
+  fill(dc, {px(152), h - px(32), w, h}, m_colors.base);
+  fill(dc, {px(152), h - px(33), w, h - px(32)}, m_colors.border);
   Gdiplus::Graphics graphics(dc);
-  icon(graphics, PNG_PAW, {px(22), px(20), px(28), px(28)}, m_colors.accent);
-  text(dc, L"OpenTypingPet", {px(62), 0, px(300), px(68)}, m_titleFont,
-       m_colors.text);
+  icon(graphics, PNG_PAW, {px(16), px(24), px(24), px(24)}, m_colors.accent);
+  text(dc, L"OpenTypingPet", {px(14), px(52), px(142), px(76)}, m_font, m_colors.text);
+  const wchar_t *titles[] = {L"桌宠", L"动作", L"应用"};
+  text(dc, titles[m_tab], {left, px(20), w - px(220), px(60)}, m_titleFont, m_colors.text);
   const auto character = m_engine.character();
-  if (character && !character->clips.empty())
-    drawFrame(graphics, {px(22), px(88), px(220), px(224)},
-              character->clips[m_engine.action()], m_frame,
-              m_preferences.smooth);
-  else
-    icon(graphics, PNG_PAW, {px(100), px(160), px(64), px(64)}, m_colors.muted);
-  text(dc, character ? character->name : L"尚未选择角色",
-       {px(22), px(326), px(242), px(386)}, m_titleFont, m_colors.text,
-       DT_LEFT | DT_WORDBREAK);
-  if (character)
-    text(dc, std::to_wstring(character->clips.size()) + L" 个动作",
-         {px(22), px(382), px(242), px(408)}, m_font, m_colors.muted);
-  fill(dc, {px(22), px(420), px(242), px(421)}, m_colors.border);
-  std::wstring state = m_busy      ? L"正在导入…"
-                       : m_paused  ? L"已暂停"
-                       : character ? character->clips[m_engine.action()].label
-                                   : L"未运行";
-  text(dc, state, {px(22), px(430), px(242), px(462)}, m_font,
-       m_paused ? m_colors.muted : m_colors.accent);
-  const int left = px(288), right = w - px(24);
   if (m_tab == 0) {
-    text(dc, L"界面主题", {left, px(148), left + px(90), px(182)}, m_font,
-         m_colors.text);
-    text(dc, L"窗口", {left, px(190), right, px(216)}, m_headingFont,
-         m_colors.text);
-    fill(dc, {left, px(304), right, px(305)}, m_colors.border);
-    text(dc, L"外观", {left, px(308), right, px(336)}, m_headingFont,
-         m_colors.text);
-    text(dc, L"宽度", {left, px(340), left + px(80), px(376)}, m_font,
-         m_colors.text);
-    text(dc, L"不透明度", {left, px(388), left + px(84), px(422)}, m_font,
-         m_colors.text);
+    text(dc, character ? character->name : L"尚未选择角色",
+         {left, px(82), right, px(114)}, m_headingFont, m_colors.text);
+    text(dc, L"桌面", {left, px(124), right, px(150)}, m_font, m_colors.muted);
+    fill(dc, {left, px(252), right, px(253)}, m_colors.border);
+    text(dc, L"外观", {left, px(264), right, px(290)}, m_font, m_colors.muted);
+    text(dc, L"宽度", {left, px(300), left + px(64), px(334)}, m_font, m_colors.text);
+    text(dc, L"不透明度", {left, px(352), left + px(68), px(386)}, m_font, m_colors.text);
     text(dc, std::to_wstring(m_preferences.opacity) + L"%",
-         {right - px(72), px(388), right, px(422)}, m_font, m_colors.text,
+         {right - px(56), px(352), right, px(386)}, m_font, m_colors.text,
          DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-    text(dc, L"缩放方式", {left, px(436), left + px(84), px(470)}, m_font,
-         m_colors.text);
+    text(dc, L"缩放", {left, px(404), left + px(64), px(438)}, m_font, m_colors.text);
   } else if (m_tab == 1) {
-    text(dc, L"动作时序", {left, px(148), right, px(178)}, m_headingFont,
-         m_colors.text);
-    text(dc, L"待机延迟", {left, px(190), right - px(200), px(226)}, m_font,
-         m_colors.text);
-    text(dc, L"特殊动作最短显示", {left, px(250), right - px(200), px(286)},
-         m_font, m_colors.text);
-    text(dc, L"毫秒", {right - px(30), px(190), right, px(226)}, m_font,
-         m_colors.muted);
-    text(dc, L"毫秒", {right - px(30), px(250), right, px(286)}, m_font,
-         m_colors.muted);
+    fill(dc, {left, h - px(192), right, h - px(191)}, m_colors.border);
+    text(dc, L"动作时序", {left, h - px(186), right, h - px(158)}, m_font, m_colors.muted);
+    text(dc, L"待机延迟", {left, h - px(150), right - px(162), h - px(116)}, m_font, m_colors.text);
+    text(dc, L"特殊动作保持", {left, h - px(102), right - px(162), h - px(68)}, m_font, m_colors.text);
+    for (int y : {150, 102})
+      text(dc, L"ms", {right - px(26), h - px(y), right, h - px(y - 34)}, m_font, m_colors.muted);
+    if (!character)
+      text(dc, L"尚无动作", {left, px(110), right, px(152)}, m_font, m_colors.muted);
+  } else {
+    text(dc, L"外观", {left, px(88), w - px(24), px(114)}, m_font, m_colors.muted);
+    text(dc, L"界面主题", {left, px(134), w - px(310), px(168)}, m_font, m_colors.text);
+    fill(dc, {left, px(200), w - px(24), px(201)}, m_colors.border);
+    text(dc, L"启动", {left, px(214), w - px(24), px(242)}, m_font, m_colors.muted);
+    fill(dc, {left, px(366), w - px(24), px(367)}, m_colors.border);
+    text(dc, L"OpenTypingPet 0.1.0", {left, px(390), w - px(24), px(422)}, m_headingFont, m_colors.text);
+    text(dc, L"KaffuAlcaid · GPLv3", {left, px(430), w - px(24), px(458)}, m_font, m_colors.muted);
   }
-  if (!m_error.empty())
-    text(dc, m_error, {px(22), h - px(36), w - px(76), h}, m_font,
-         m_colors.error);
-  else
-    text(dc,
-         m_busy      ? L"正在导入…"
-         : m_paused  ? L"已暂停"
-         : character ? L"运行中"
-                     : L"就绪",
-         {px(22), h - px(36), w - px(76), h}, m_font, m_colors.muted);
-  text(dc, L"0.1.0", {w - px(70), h - px(36), w - px(22), h}, m_font,
+  if (m_tab != 2)
+    paintPreview(dc);
+  const std::wstring status = m_busy ? L"正在导入" : m_paused ? L"已暂停" : character ? L"运行中" : L"就绪";
+  text(dc, status, {left, h - px(30), w - px(100), h}, m_font,
+       m_paused || !character ? m_colors.muted : m_colors.accent);
+  text(dc, L"0.1.0", {w - px(80), h - px(30), w - px(24), h}, m_font,
        m_colors.muted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+  if (!m_error.empty()) {
+    fill(dc, {left, h - px(66), w - px(24), h - px(34)}, m_colors.window);
+    text(dc, m_error, {left, h - px(66), w - px(24), h - px(34)}, m_font,
+         m_colors.error, DT_LEFT | DT_WORDBREAK | DT_END_ELLIPSIS);
+  }
+}
+void AppController::paintPreview(HDC dc) {
+  RECT client{};
+  GetClientRect(m_settingsWindow, &client);
+  const int left = client.right - px(264), right = client.right - px(40);
+  text(dc, L"预览", {left, px(94), right, px(122)}, m_font, m_colors.muted);
+  const RECT area{left, px(136), right, px(400)};
+  const COLORREF background = m_previewBackground == 1 ? RGB(247, 248, 250) : RGB(35, 37, 42);
+  fill(dc, area, m_previewBackground ? background : m_colors.base);
+  if (!m_previewBackground) {
+    const int tile = px(14);
+    for (int y = area.top; y < area.bottom; y += tile)
+      for (int x = area.left; x < area.right; x += tile)
+        if (((x - area.left) / tile + (y - area.top) / tile) % 2)
+          fill(dc, {x, y, std::min(x + tile, int(area.right)), std::min(y + tile, int(area.bottom))},
+               m_colors.dark ? RGB(43, 45, 50) : RGB(235, 238, 242));
+  }
+  const auto character = m_engine.character();
+  if (!character) {
+    Gdiplus::Graphics graphics(dc);
+    icon(graphics, PNG_PAW, {left + px(84), px(244), px(56), px(56)}, m_colors.muted);
+    return;
+  }
+  const size_t action = m_tab == 1 ? m_previewAction : m_engine.action();
+  if (action >= character->actions.size())
+    return;
+  const auto &clip = character->animation(action);
+  Gdiplus::Graphics graphics(dc);
+  drawFrame(graphics, {area.left + px(8), area.top + px(8),
+                       area.right - area.left - px(16), area.bottom - area.top - px(16)},
+            clip, m_tab == 1 ? m_previewFrame : m_frame, m_preferences.smooth);
+  text(dc, character->actions[action].label, {left, px(408), right, px(438)},
+       m_headingFont, m_colors.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  const auto info = clip.format + L" · " + std::to_wstring(clip.width) + L" × " +
+                    std::to_wstring(clip.height) + L" · " + std::to_wstring(clip.frames.size()) + L" 帧";
+  text(dc, info, {left, px(438), right, px(462)}, m_font, m_colors.muted,
+       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+void AppController::invalidatePreview() {
+  RECT rect{};
+  GetClientRect(m_settingsWindow, &rect);
+  rect.left = rect.right - px(272);
+  rect.top = px(88);
+  rect.bottom -= px(38);
+  InvalidateRect(m_settingsWindow, &rect, FALSE);
+}
+void AppController::selectPreview(size_t action) {
+  const auto character = m_engine.character();
+  if (!character || action >= character->actions.size())
+    return;
+  m_previewAction = action;
+  m_previewPlaying = true;
+  m_previewFrame = m_previewLoops = 0;
+  const auto &clip = character->animation(action);
+  m_previewAt = m_previewPlaying && clip.frames.size() > 1 ? GetTickCount64() + clip.frames[0].delay : 0;
+  EnableWindow(m_controls[PreviewPlay], clip.frames.size() > 1);
+  updateTooltips();
+  InvalidateRect(m_controls[PreviewPlay], nullptr, FALSE);
+  SendMessageW(m_controls[Actions], LB_SETCURSEL, action, 0);
+  invalidatePreview();
+  schedule();
 }
 void AppController::paintButton(const DRAWITEMSTRUCT &draw) {
   const unsigned id = draw.CtlID;
   RECT rect = draw.rcItem;
   const bool disabled = draw.itemState & ODS_DISABLED;
-  const bool selected = (id >= ThemeSystem && id <= ThemeDark &&
-                         int(id - ThemeSystem) == m_preferences.theme) ||
-                        (id == PixelMode && !m_preferences.smooth) ||
-                        (id == SmoothMode && m_preferences.smooth);
-  const bool tab = id >= TabDisplay && id <= TabActions;
-  COLORREF background = (draw.itemState & ODS_SELECTED) || selected
-                            ? m_colors.selection
-                            : m_colors.button;
-  if (tab || id == Pause)
-    background = m_colors.window;
-  if (id == Reset)
-    background = m_colors.panel;
+  const bool tab = id >= TabPet && id <= TabApp;
+  const bool activeTab = tab && int(id - TabPet) == m_tab;
+  const bool selected = (id >= ThemeSystem && id <= ThemeDark && int(id - ThemeSystem) == m_preferences.theme) ||
+                        (id == PixelMode && !m_preferences.smooth) || (id == SmoothMode && m_preferences.smooth);
+  const bool check = id == Topmost || id == Locked || id == StartSettings || id == LoginStartup;
+  COLORREF background = (draw.itemState & ODS_SELECTED) || selected ? m_colors.selection : m_colors.button;
+  if (tab) background = activeTab ? m_colors.selection : m_colors.panel;
+  if (check) background = m_colors.window;
   fill(draw.hDC, rect, background);
-  const auto foreground = disabled   ? m_colors.muted
-                          : selected ? m_colors.accent
-                                     : m_colors.text;
-  if (tab) {
-    const bool active = int(id - TabDisplay) == m_tab;
-    fill(draw.hDC,
-         {0, rect.bottom - px(active ? 2 : 1), rect.right, rect.bottom},
-         active ? m_colors.accent : m_colors.border);
-  }
-  if (id == Topmost || id == Locked) {
-    fill(draw.hDC, rect, m_colors.window);
-    const bool checked =
-        id == Topmost ? m_preferences.topmost : m_preferences.locked;
-    RECT box{rect.right - px(24), px(6), rect.right - px(4), px(26)};
-    fill(draw.hDC, box, checked ? m_colors.accent : m_colors.base);
-    if (checked)
-      text(draw.hDC, L"✓", box, m_headingFont,
-           m_colors.dark ? RGB(20, 40, 30) : RGB(255, 255, 255),
-           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    else {
-      HBRUSH border = CreateSolidBrush(m_colors.border);
-      FrameRect(draw.hDC, &box, border);
-      DeleteObject(border);
+  const auto foreground = disabled ? m_colors.muted : selected || activeTab ? m_colors.accent : m_colors.text;
+  if (id >= PreviewChecker && id <= PreviewDark) {
+    RECT swatch = rect;
+    InflateRect(&swatch, -px(5), -px(5));
+    fill(draw.hDC, swatch, id == PreviewDark ? RGB(35, 37, 42) : RGB(247, 248, 250));
+    if (id == PreviewChecker) {
+      const int middleX = (swatch.left + swatch.right) / 2, middleY = (swatch.top + swatch.bottom) / 2;
+      fill(draw.hDC, {swatch.left, swatch.top, middleX, middleY}, RGB(164, 169, 179));
+      fill(draw.hDC, {middleX, middleY, swatch.right, swatch.bottom}, RGB(164, 169, 179));
     }
-    rect.right -= px(34);
+    HBRUSH border = CreateSolidBrush(int(id - PreviewChecker) == m_previewBackground ? m_colors.accent : m_colors.border);
+    FrameRect(draw.hDC, &rect, border);
+    DeleteObject(border);
+  } else {
+    if (check) {
+      const bool checked = id == Topmost ? m_preferences.topmost : id == Locked ? m_preferences.locked :
+                           id == StartSettings ? m_preferences.showSettingsOnStart : m_loginStartup;
+      RECT box{rect.right - px(22), px(8), rect.right - px(2), px(28)};
+      fill(draw.hDC, box, checked ? m_colors.accent : m_colors.base);
+      if (checked)
+        text(draw.hDC, L"✓", box, m_headingFont, m_colors.dark ? RGB(20, 40, 30) : RGB(255, 255, 255),
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+      else {
+        HBRUSH border = CreateSolidBrush(m_colors.border);
+        FrameRect(draw.hDC, &box, border);
+        DeleteObject(border);
+      }
+      rect.right -= px(32);
+    }
+    int image = id == Open ? PNG_FOLDER : id == Pause ? (m_paused ? PNG_PLAY : PNG_PAUSE) :
+                id == PreviewPlay ? (m_previewPlaying ? PNG_PAUSE : PNG_PLAY) :
+                id == Reset ? PNG_RESET : id == TabPet ? PNG_PAW : id == TabActions ? PNG_PLAY :
+                id == TabApp ? PNG_SETTINGS : 0;
+    const bool iconOnly = id == Pause || id == PreviewPlay;
+    if (image) {
+      Gdiplus::Graphics graphics(draw.hDC);
+      const int x = iconOnly ? (rect.right - px(18)) / 2 : px(12);
+      icon(graphics, image, {x, (rect.bottom - px(18)) / 2, px(18), px(18)}, foreground);
+      if (!iconOnly) rect.left += px(38);
+    }
+    if (!iconOnly) {
+      wchar_t caption[128]{};
+      GetWindowTextW(draw.hwndItem, caption, 128);
+      text(draw.hDC, caption, rect, m_font, foreground,
+           (tab || check ? DT_LEFT : DT_CENTER) | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
   }
-  wchar_t caption[128]{};
-  GetWindowTextW(draw.hwndItem, caption, 128);
-  int image = id == Open    ? PNG_FOLDER
-              : id == Pause ? (m_paused ? PNG_PLAY : PNG_PAUSE)
-              : id == Reset ? PNG_RESET
-                            : 0;
-  if (image) {
-    Gdiplus::Graphics graphics(draw.hDC);
-    const int x = id == Pause ? (rect.right - px(18)) / 2 : px(10);
-    icon(graphics, image, {x, (rect.bottom - px(18)) / 2, px(18), px(18)},
-         foreground);
-    if (id != Pause)
-      rect.left += px(30);
-  }
-  const auto textColor =
-      tab ? (int(id - TabDisplay) == m_tab ? m_colors.accent : m_colors.muted)
-          : foreground;
-  text(draw.hDC, caption, rect, m_font, textColor,
-       (id == Topmost || id == Locked ? DT_LEFT : DT_CENTER) | DT_VCENTER |
-           DT_SINGLELINE);
   if (draw.itemState & ODS_FOCUS) {
     RECT focus = draw.rcItem;
     InflateRect(&focus, -px(3), -px(3));
@@ -519,34 +598,34 @@ void AppController::paintButton(const DRAWITEMSTRUCT &draw) {
 }
 void AppController::paintAction(const DRAWITEMSTRUCT &draw) {
   const auto character = m_engine.character();
-  if (draw.itemID == UINT(-1) || !character ||
-      draw.itemID >= character->clips.size())
+  if (draw.itemID == UINT(-1) || !character || draw.itemID >= character->actions.size())
     return;
-  const auto &clip = character->clips[draw.itemID];
-  const bool active = draw.itemID == m_engine.action();
-  fill(draw.hDC, draw.rcItem, active ? m_colors.selection : m_colors.window);
+  const auto &action = character->actions[draw.itemID];
+  const auto &clip = character->animation(draw.itemID);
+  fill(draw.hDC, draw.rcItem, draw.itemID == m_previewAction ? m_colors.selection : m_colors.window);
   Gdiplus::Graphics graphics(draw.hDC);
-  drawFrame(graphics,
-            {draw.rcItem.left + px(6), draw.rcItem.top + px(6), px(64), px(64)},
-            clip, 0, false);
-  RECT label = draw.rcItem;
-  label.left += px(86);
-  label.right -= px(88);
-  text(draw.hDC, clip.label, label, m_font, m_colors.text);
-  if (clip.frames.size() > 1) {
-    RECT count = draw.rcItem;
-    count.left = count.right - px(92);
-    count.right -= px(32);
-    text(draw.hDC, std::to_wstring(clip.frames.size()) + L" 帧", count, m_font,
-         m_colors.muted);
+  drawFrame(graphics, {draw.rcItem.left + px(6), draw.rcItem.top + px(8), px(48), px(48)}, clip, 0, m_preferences.smooth);
+  RECT label{draw.rcItem.left + px(66), draw.rcItem.top + px(7), draw.rcItem.right - px(12), draw.rcItem.top + px(32)};
+  text(draw.hDC, action.label, label, m_font, m_colors.text);
+  std::wstring trigger;
+  for (const auto &rule : character->rules)
+    if (std::find(rule.actions.begin(), rule.actions.end(), action.id) != rule.actions.end()) {
+      if (!trigger.empty()) trigger += L" · ";
+      trigger += rule.label;
+    }
+  if (trigger.empty())
+    trigger = action.id == character->defaultAction ? L"默认动作" : L"动作结束后触发";
+  else if (trigger == action.label)
+    trigger = clip.format + L" · " + std::to_wstring(clip.frames.size()) + L" 帧";
+  label.top = draw.rcItem.top + px(32);
+  label.bottom = draw.rcItem.bottom - px(5);
+  text(draw.hDC, trigger, label, m_font, m_colors.muted);
+  fill(draw.hDC, {draw.rcItem.left, draw.rcItem.bottom - 1, draw.rcItem.right, draw.rcItem.bottom}, m_colors.border);
+  if (draw.itemState & ODS_FOCUS) {
+    RECT focus = draw.rcItem;
+    InflateRect(&focus, -px(2), -px(2));
+    DrawFocusRect(draw.hDC, &focus);
   }
-  icon(graphics, PNG_PLAY,
-       {draw.rcItem.right - px(26), draw.rcItem.top + px(28), px(18), px(18)},
-       m_colors.text);
-  fill(draw.hDC,
-       {draw.rcItem.left, draw.rcItem.bottom - 1, draw.rcItem.right,
-        draw.rcItem.bottom},
-       m_colors.border);
 }
 
 void AppController::restore(const std::wstring &path) {
@@ -585,16 +664,19 @@ void AppController::finishImport(ImportResult *raw) {
   m_busy = false;
   if (!result->character) {
     m_error = result->error;
+    openSettings();
   } else {
+    m_preferences.initialized = true;
     m_preferences.presetPath = result->character->archivePath;
     m_engine.setCharacter(std::move(result->character));
     const auto character = m_engine.character();
     SetWindowTextW(m_petWindow,
                    (L"OpenTypingPet - " + character->name).c_str());
     SendMessageW(m_controls[Actions], LB_RESETCONTENT, 0, 0);
-    for (const auto &clip : character->clips)
+    for (const auto &action : character->actions)
       SendMessageW(m_controls[Actions], LB_ADDSTRING, 0,
-                   reinterpret_cast<LPARAM>(clip.label.c_str()));
+                   reinterpret_cast<LPARAM>(action.label.c_str()));
+    selectPreview(character->actionIndex(character->defaultAction));
     if (m_interactive)
       m_preferences.save();
     configureInput();
@@ -611,9 +693,9 @@ void AppController::choosePreset() {
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr,
                               CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog))))
     return;
-  const COMDLG_FILTERSPEC filter{L"TypingPet 预设", L"*.zip"};
+  const COMDLG_FILTERSPEC filter{L"角色包", L"*.zip"};
   dialog->SetFileTypes(1, &filter);
-  dialog->SetTitle(L"导入 TypingPet 预设");
+  dialog->SetTitle(L"导入角色包");
   FILEOPENDIALOGOPTIONS options{};
   dialog->GetOptions(&options);
   dialog->SetOptions(options | FOS_FILEMUSTEXIST | FOS_FORCEFILESYSTEM);
@@ -649,9 +731,8 @@ void AppController::configureInput() {
   bool mouse = false;
   const auto character = m_engine.character();
   if (character)
-    for (const auto &binding : character->bindings)
-      mouse |= binding.key == 1 || binding.key == 2 || binding.key == 4 ||
-               binding.key == 5 || binding.key == 6;
+    for (const auto &rule : character->rules)
+      mouse |= rule.event == InputEventType::MouseDown || rule.event == InputEventType::MouseUp;
   if (!m_input.setEnabled(m_interactive && character && !m_paused, mouse)) {
     m_paused = true;
     m_error = L"无法更新输入监听，已停止处理输入。请重新启动程序。";
@@ -662,17 +743,17 @@ void AppController::onAction() {
   m_loops = 0;
   const auto character = m_engine.character();
   if (character) {
-    const auto &clip = character->clips[m_engine.action()];
-    m_frameAt = !m_paused && clip.frames.size() > 1
+    const auto &clip = character->animation(m_engine.action());
+    const auto &action = character->actions[m_engine.action()];
+    m_frameAt = !m_paused && (clip.frames.size() > 1 || !action.nextAction.empty() || !action.interruptible)
                     ? GetTickCount64() + clip.frames[0].delay
                     : 0;
   }
   renderPet();
   schedule();
   if (IsWindowVisible(m_settingsWindow)) {
-    RECT area{px(0), px(68), px(263), px(470)};
-    InvalidateRect(m_settingsWindow, &area, FALSE);
-    InvalidateRect(m_controls[Actions], nullptr, FALSE);
+    if (m_tab == 0)
+      invalidatePreview();
   }
 }
 void AppController::onTimer() {
@@ -681,13 +762,15 @@ void AppController::onTimer() {
   const auto character = m_engine.character();
   bool changed = false;
   if (character && !m_paused) {
-    const auto &clip = character->clips[m_engine.action()];
+    const auto &clip = character->animation(m_engine.action());
     int advanced = 0;
     while (m_frameAt && now >= m_frameAt && advanced++ < 300) {
       if (m_frame + 1 >= clip.frames.size()) {
         ++m_loops;
-        if (clip.loops >= 0 && m_loops >= clip.loops) {
+        const int loops = character->loopCount(m_engine.action());
+        if (loops >= 0 && m_loops >= loops) {
           m_frameAt = 0;
+          m_engine.animationFinished();
           break;
         }
         m_frame = 0;
@@ -701,10 +784,35 @@ void AppController::onTimer() {
   }
   if (changed) {
     renderPet();
-    if (IsWindowVisible(m_settingsWindow)) {
-      RECT area{px(22), px(88), px(242), px(312)};
-      InvalidateRect(m_settingsWindow, &area, FALSE);
+    if (m_tab == 0 && IsWindowVisible(m_settingsWindow))
+      invalidatePreview();
+  }
+  if (character && m_tab == 1 && m_previewPlaying && m_previewAt &&
+      IsWindowVisible(m_settingsWindow) && !IsIconic(m_settingsWindow)) {
+    const auto &clip = character->animation(m_previewAction);
+    bool updated = false;
+    int advanced = 0;
+    while (m_previewAt && now >= m_previewAt && advanced++ < 300) {
+      if (m_previewFrame + 1 >= clip.frames.size()) {
+        ++m_previewLoops;
+        const int loops = character->loopCount(m_previewAction);
+        if (loops >= 0 && m_previewLoops >= unsigned(loops)) {
+          m_previewAt = 0;
+          m_previewPlaying = false;
+          updateTooltips();
+          InvalidateRect(m_controls[PreviewPlay], nullptr, FALSE);
+          break;
+        }
+        m_previewFrame = 0;
+      } else
+        ++m_previewFrame;
+      m_previewAt += clip.frames[m_previewFrame].delay;
+      updated = true;
     }
+    if (advanced >= 300 && m_previewAt)
+      m_previewAt = now + clip.frames[m_previewFrame].delay;
+    if (updated)
+      invalidatePreview();
   }
   schedule();
 }
@@ -715,6 +823,9 @@ void AppController::schedule() {
   uint64_t deadline = m_engine.deadline();
   if (m_frameAt && !m_paused)
     deadline = deadline ? std::min(deadline, m_frameAt) : m_frameAt;
+  if (m_previewAt && m_previewPlaying && m_tab == 1 &&
+      IsWindowVisible(m_settingsWindow) && !IsIconic(m_settingsWindow))
+    deadline = deadline ? std::min(deadline, m_previewAt) : m_previewAt;
   if (deadline) {
     const auto now = GetTickCount64();
     SetTimer(m_settingsWindow, AnimationTimer,
@@ -727,7 +838,7 @@ void AppController::renderPet() {
   const auto character = m_engine.character();
   if (!m_petWindow || !character)
     return;
-  const auto &clip = character->clips[m_engine.action()];
+  const auto &clip = character->animation(m_engine.action());
   const UINT dpi = GetDpiForWindow(m_petWindow);
   int width = MulDiv(m_preferences.width, dpi, 96),
       height =
@@ -945,6 +1056,10 @@ void AppController::contextMenu(POINT point) {
 void AppController::command(unsigned id, unsigned notification) {
   if (m_syncing)
     return;
+  const bool edit = id == WidthEdit || id == IdleEdit || id == HoldEdit;
+  // Owner-drawn buttons also send focus notifications through WM_COMMAND.
+  if (!edit && id != Actions && notification != BN_CLICKED)
+    return;
   if (id == Open) {
     choosePreset();
     return;
@@ -965,8 +1080,10 @@ void AppController::command(unsigned id, unsigned notification) {
     quit();
     return;
   }
-  if (id >= TabDisplay && id <= TabActions) {
-    m_tab = int(id - TabDisplay);
+  if (id >= TabPet && id <= TabApp) {
+    m_tab = int(id - TabPet);
+    if (m_tab == 1)
+      selectPreview(m_previewAction);
     layout();
     return;
   }
@@ -978,8 +1095,40 @@ void AppController::command(unsigned id, unsigned notification) {
     if (notification == LBN_SELCHANGE) {
       const auto index = SendMessageW(m_controls[Actions], LB_GETCURSEL, 0, 0);
       if (index != LB_ERR)
-        m_engine.preview(size_t(index));
+        selectPreview(size_t(index));
     }
+    return;
+  }
+  if (id >= PreviewChecker && id <= PreviewDark) {
+    m_previewBackground = int(id - PreviewChecker);
+    invalidatePreview();
+    for (unsigned swatch = PreviewChecker; swatch <= PreviewDark; ++swatch)
+      InvalidateRect(m_controls[swatch], nullptr, FALSE);
+    return;
+  }
+  if (id == PreviewPlay) {
+    m_previewPlaying = !m_previewPlaying;
+    if (m_previewPlaying)
+      selectPreview(m_previewAction);
+    else
+      m_previewAt = 0;
+    updateTooltips();
+    InvalidateRect(m_controls[PreviewPlay], nullptr, FALSE);
+    schedule();
+    return;
+  }
+  if (id == StartSettings || id == LoginStartup) {
+    if (id == StartSettings) {
+      m_preferences.showSettingsOnStart = !m_preferences.showSettingsOnStart;
+      if (m_interactive)
+        m_preferences.save();
+    } else if (!m_interactive || setLoginStartup(!m_loginStartup)) {
+      m_loginStartup = !m_loginStartup;
+      m_error.clear();
+    } else
+      m_error = L"无法更新登录启动设置。";
+    InvalidateRect(m_controls[id], nullptr, FALSE);
+    InvalidateRect(m_settingsWindow, nullptr, FALSE);
     return;
   }
   if (id == Topmost) {
@@ -1077,6 +1226,58 @@ LRESULT CALLBACK AppController::editProc(HWND window, UINT message,
   }
   return DefSubclassProc(window, message, wParam, lParam);
 }
+void AppController::paintSlider(HWND window, HDC dc) {
+  RECT client{}, track{}, thumb{};
+  GetClientRect(window, &client);
+  fill(dc, client, m_colors.window);
+  SendMessageW(window, TBM_GETCHANNELRECT, 0, reinterpret_cast<LPARAM>(&track));
+  SendMessageW(window, TBM_GETTHUMBRECT, 0, reinterpret_cast<LPARAM>(&thumb));
+  const int centerX = (thumb.left + thumb.right) / 2;
+  const int centerY = (thumb.top + thumb.bottom) / 2;
+  track.top = centerY - px(2);
+  track.bottom = centerY + px(2);
+  fill(dc, track, m_colors.border);
+  RECT progress = track;
+  progress.right = centerX;
+  fill(dc, progress, m_colors.accent);
+  const int radius = px(7);
+  HBRUSH brush = CreateSolidBrush(IsWindowEnabled(window) ? m_colors.accent : m_colors.muted);
+  const auto oldBrush = SelectObject(dc, brush);
+  const auto oldPen = SelectObject(dc, GetStockObject(NULL_PEN));
+  Ellipse(dc, centerX - radius, centerY - radius, centerX + radius, centerY + radius);
+  SelectObject(dc, oldPen);
+  SelectObject(dc, oldBrush);
+  DeleteObject(brush);
+  if (GetFocus() == window) {
+    InflateRect(&client, -px(2), -px(2));
+    DrawFocusRect(dc, &client);
+  }
+}
+LRESULT CALLBACK AppController::sliderProc(HWND window, UINT message, WPARAM wParam,
+                                          LPARAM lParam, UINT_PTR id, DWORD_PTR data) {
+  auto *self = reinterpret_cast<AppController *>(data);
+  if (message == WM_NCDESTROY) {
+    RemoveWindowSubclass(window, sliderProc, id);
+    return DefSubclassProc(window, message, wParam, lParam);
+  }
+  if (message == WM_ERASEBKGND)
+    return 1;
+  if (message == WM_PRINTCLIENT || (message == WM_PRINT && (lParam & PRF_CLIENT))) {
+    self->paintSlider(window, reinterpret_cast<HDC>(wParam));
+    return 0;
+  }
+  if (message == WM_PAINT) {
+    PAINTSTRUCT paint{};
+    HDC dc = BeginPaint(window, &paint);
+    self->paintSlider(window, dc);
+    EndPaint(window, &paint);
+    return 0;
+  }
+  const auto result = DefSubclassProc(window, message, wParam, lParam);
+  if (message == WM_SETFOCUS || message == WM_KILLFOCUS)
+    InvalidateRect(window, nullptr, FALSE);
+  return result;
+}
 void AppController::paintScrollBar(HWND window, HDC supplied) {
   SCROLLBARINFO info{sizeof(info)};
   if (!GetScrollBarInfo(window, OBJID_VSCROLL, &info) ||
@@ -1133,8 +1334,25 @@ LRESULT AppController::message(UINT message, WPARAM wParam, LPARAM lParam) {
     return 0;
   }
   switch (message) {
+  case WM_COPYDATA: {
+    const auto *data = reinterpret_cast<COPYDATASTRUCT *>(lParam);
+    if (!data || data->dwData != 0x4F545050 || !data->lpData ||
+        data->cbData < sizeof(wchar_t) || data->cbData > 65536 || data->cbData % sizeof(wchar_t))
+      return FALSE;
+    const auto *path = static_cast<const wchar_t *>(data->lpData);
+    if (path[data->cbData / sizeof(wchar_t) - 1] != L'\0')
+      return FALSE;
+    openSettings();
+    if (*path)
+      importPreset(path);
+    return TRUE;
+  }
   case WM_CLOSE:
+    m_preferences.initialized = true;
+    if (m_interactive)
+      m_preferences.save();
     ShowWindow(m_settingsWindow, SW_HIDE);
+    schedule();
     return 0;
   case WM_SIZE:
     layout();
@@ -1163,7 +1381,7 @@ LRESULT AppController::message(UINT message, WPARAM wParam, LPARAM lParam) {
   }
   case WM_GETMINMAXINFO: {
     auto *limits = reinterpret_cast<MINMAXINFO *>(lParam);
-    RECT rect{0, 0, px(760), px(580)};
+    RECT rect{0, 0, px(820), px(600)};
     AdjustWindowRectExForDpi(&rect, WS_OVERLAPPEDWINDOW, FALSE, 0, m_dpi);
     limits->ptMinTrackSize = {rect.right - rect.left, rect.bottom - rect.top};
     return 0;
@@ -1251,7 +1469,7 @@ LRESULT AppController::message(UINT message, WPARAM wParam, LPARAM lParam) {
   }
   case WM_MEASUREITEM: {
     auto *measure = reinterpret_cast<MEASUREITEMSTRUCT *>(lParam);
-    measure->itemHeight = px(76);
+    measure->itemHeight = px(64);
     if (measure->CtlType == ODT_MENU) {
       const auto *item = reinterpret_cast<const MenuItem *>(measure->itemData);
       measure->itemHeight = px(item && item->label.empty() ? 8 : 32);
@@ -1268,40 +1486,6 @@ LRESULT AppController::message(UINT message, WPARAM wParam, LPARAM lParam) {
     else
       paintButton(draw);
     return TRUE;
-  }
-  case WM_NOTIFY: {
-    auto *header = reinterpret_cast<NMHDR *>(lParam);
-    if (header->code == NM_CUSTOMDRAW &&
-        (header->idFrom == WidthSlider || header->idFrom == OpacitySlider)) {
-      auto *draw = reinterpret_cast<NMCUSTOMDRAW *>(lParam);
-      if (draw->dwDrawStage == CDDS_PREPAINT)
-        return CDRF_NOTIFYITEMDRAW;
-      if (draw->dwDrawStage == CDDS_ITEMPREPAINT) {
-        if (draw->dwItemSpec == TBCD_CHANNEL) {
-          RECT track = draw->rc;
-          const int middle = (track.top + track.bottom) / 2;
-          track.top = middle - px(2);
-          track.bottom = middle + px(2);
-          fill(draw->hdc, track, m_colors.border);
-          return CDRF_SKIPDEFAULT;
-        }
-        if (draw->dwItemSpec == TBCD_THUMB) {
-          HBRUSH brush = CreateSolidBrush(m_colors.accent);
-          auto oldBrush = SelectObject(draw->hdc, brush);
-          auto oldPen = SelectObject(draw->hdc, GetStockObject(NULL_PEN));
-          const int centerX = (draw->rc.left + draw->rc.right) / 2;
-          const int centerY = (draw->rc.top + draw->rc.bottom) / 2;
-          const int radius = px(8);
-          Ellipse(draw->hdc, centerX - radius, centerY - radius,
-                  centerX + radius, centerY + radius);
-          SelectObject(draw->hdc, oldPen);
-          SelectObject(draw->hdc, oldBrush);
-          DeleteObject(brush);
-          return CDRF_SKIPDEFAULT;
-        }
-      }
-    }
-    break;
   }
   }
   return DefWindowProcW(m_settingsWindow, message, wParam, lParam);
