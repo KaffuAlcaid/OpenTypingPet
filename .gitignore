@@ -1,0 +1,11 @@
+/build/
+/build-native/
+/dist/
+/out/
+/.cache/
+/.vs/
+/.idea/
+/CMakeUserPresets.json
+/*.zip
+*.user
+*.log

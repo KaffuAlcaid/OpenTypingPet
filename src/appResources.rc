@@ -1,0 +1,32 @@
+#include "resourceIds.h"
+#include <windows.h>
+IDI_APP ICON "../assets/app.ico"
+PNG_PAW RCDATA "../assets/paw-print.png"
+PNG_FOLDER RCDATA "../assets/folder-open.png"
+PNG_PAUSE RCDATA "../assets/pause.png"
+PNG_PLAY RCDATA "../assets/play.png"
+PNG_RESET RCDATA "../assets/rotate-ccw.png"
+PNG_SETTINGS RCDATA "../assets/settings.png"
+PNG_CLOSE RCDATA "../assets/x.png"
+1 VERSIONINFO
+ FILEVERSION 0,1,0,0
+ PRODUCTVERSION 0,1,0,0
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+ BLOCK "StringFileInfo"
+ BEGIN
+  BLOCK "040904b0"
+  BEGIN
+   VALUE "FileDescription", "OpenTypingPet"
+   VALUE "FileVersion", "0.1.0"
+   VALUE "LegalCopyright", "Copyright (c) 2026 KaffuAlcaid"
+   VALUE "ProductName", "OpenTypingPet"
+   VALUE "ProductVersion", "0.1.0"
+  END
+ END
+ BLOCK "VarFileInfo"
+ BEGIN
+  VALUE "Translation", 0x0409, 1200
+ END
+END
