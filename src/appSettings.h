@@ -1,12 +1,19 @@
 #pragma once
 #include <string>
 #include <windows.h>
-struct Preferences {
-  std::wstring presetPath;
-  int width = 280, opacity = 100, idleDelay = 800, minimumHold = 0, theme = 0;
+struct PetSettings {
+  int width = 280, opacity = 100, idleDelay = 800, minimumHold = 0;
   bool topmost = true, locked = false, smooth = false, hasPosition = false;
-  bool initialized = false, showSettingsOnStart = false;
+  bool snap = true;
   POINT position{};
+};
+struct Preferences : PetSettings {
+  std::wstring presetPath;
+  int theme = 0;
+  bool initialized = false, showSettingsOnStart = false;
+  bool pauseOnLock = true, pauseOnDisplayOff = true;
+  int fullscreenPolicy = 0;
+  std::wstring fullscreenExceptions;
   void load();
   void save() const;
 };

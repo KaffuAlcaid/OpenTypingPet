@@ -1,6 +1,8 @@
 #include "presetLoader.h"
 #include "animationDecoder.h"
+#include "animationCache.h"
 #include "characterManifest.h"
+#include "storageUtils.h"
 #include <algorithm>
 #include <bcrypt.h>
 #include <filesystem>
@@ -11,6 +13,7 @@
 #include <shlobj.h>
 #include <shlwapi.h>
 #include <sstream>
+#include <nlohmann/json.hpp>
 namespace fs = std::filesystem;
 namespace {
 constexpr uint64_t MiB = 1024 * 1024;
@@ -221,7 +224,10 @@ ImportResult PresetLoader::load(const std::wstring &zipPath,
         action.id = id;
         action.label = name;
         action.clip = character->clips.size();
-        character->clips.push_back(decodeAnimation(files.at(file), name, budget));
+        auto clip = cachedAnimation(files.at(file), name, budget);
+        clip.id = id + "Image";
+        clip.source = file;
+        character->clips.push_back(std::move(clip));
         character->actions.push_back(std::move(action));
       };
       addAction("idle", L"待机", "basic.png");
@@ -302,6 +308,17 @@ ImportResult PresetLoader::load(const std::wstring &zipPath,
     }
     character->archivePath = archivePath.wstring();
     return {std::move(character), {}};
+  } catch (const ImportFailure &failure) {
+    if (archive.m_pState) mz_zip_reader_end(&archive);
+    std::wstring message;
+    for (const auto &issue : failure.diagnostics) {
+      if (!message.empty()) message += L"\r\n";
+      message += issue.file;
+      if (!issue.field.empty()) message += L" / " + issue.field;
+      if (issue.line) message += L" 第 " + std::to_wstring(issue.line) + L" 行，第 " + std::to_wstring(issue.column) + L" 列";
+      message += L"：" + issue.message;
+    }
+    return {nullptr, message, failure.diagnostics};
   } catch (const std::wstring &error) {
     if (archive.m_pState)
       mz_zip_reader_end(&archive);
@@ -311,4 +328,72 @@ ImportResult PresetLoader::load(const std::wstring &zipPath,
       mz_zip_reader_end(&archive);
     return {nullptr, L"无法读取预设，请检查文件内容、目录权限和磁盘空间。"};
   }
+}
+CharacterResources PresetLoader::readResources(const std::wstring &zipPath) {
+  const auto bytes = read(zipPath);
+  mz_zip_archive archive{};
+  require(mz_zip_reader_init_mem(&archive, bytes.data(), bytes.size(), 0), L"ZIP 无效");
+  CharacterResources resources;
+  try {
+    require(mz_zip_reader_get_num_files(&archive) <= 256, L"角色包包含过多文件");
+    uint64_t total = 0;
+    for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&archive); ++i) {
+      mz_zip_archive_file_stat stat{};
+      require(mz_zip_reader_file_stat(&archive, i, &stat), L"ZIP 目录无效");
+      if (stat.m_is_directory) continue;
+      std::string name(stat.m_filename);
+      std::replace(name.begin(), name.end(), '\\', '/');
+      require(!name.empty() && name[0] != '/' && name.find(':') == std::string::npos, L"ZIP 包含无效路径");
+      std::istringstream parts(name);
+      std::string part;
+      while (std::getline(parts, part, '/')) require(!part.empty() && part != "." && part != "..", L"ZIP 包含无效路径");
+      std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return c >= 'A' && c <= 'Z' ? char(c + 32) : char(c); });
+      total += stat.m_uncomp_size;
+      require(stat.m_uncomp_size <= 15 * MiB && total <= 96 * MiB && !stat.m_is_encrypted, L"ZIP 资源超过限制或已加密");
+      require(!resources.contains(name), L"ZIP 包含重复资源");
+      std::vector<uint8_t> data(size_t(stat.m_uncomp_size));
+      require(mz_zip_reader_extract_to_mem(&archive, i, data.data(), data.size(), 0), L"无法解压角色资源");
+      resources.emplace(name, std::move(data));
+    }
+  } catch (...) { mz_zip_reader_end(&archive); throw; }
+  mz_zip_reader_end(&archive);
+  return resources;
+}
+void PresetLoader::writePackage(const std::wstring &zipPath, const CharacterResources &resources) {
+  require(!resources.empty() && resources.size() <= 256, L"角色包文件数量无效");
+  mz_zip_archive archive{};
+  require(mz_zip_writer_init_heap(&archive, 0, 0), L"无法创建 ZIP");
+  void *buffer = nullptr;
+  size_t size = 0;
+  try {
+    uint64_t total = 0;
+    for (const auto &[name, bytes] : resources) {
+      total += bytes.size();
+      require(bytes.size() <= 15 * MiB && total <= 96 * MiB, L"角色资源超过大小限制");
+      require(mz_zip_writer_add_mem(&archive, name.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION), L"无法压缩角色资源");
+    }
+    require(mz_zip_writer_finalize_heap_archive(&archive, &buffer, &size), L"无法完成 ZIP");
+    require(size <= 64 * MiB, L"角色包超过 64 MiB");
+    const auto *begin = static_cast<const uint8_t *>(buffer);
+    Storage::write(zipPath, {begin, begin + size});
+  } catch (...) { mz_free(buffer); mz_zip_writer_end(&archive); throw; }
+  mz_free(buffer);
+  mz_zip_writer_end(&archive);
+}
+CharacterResources PresetLoader::exportResources(const CharacterDefinition &character) {
+  const auto original = readResources(character.archivePath);
+  CharacterResources output;
+  for (const auto &clip : character.clips) {
+    auto found = original.find(clip.source);
+    if (found == original.end() && character.id.starts_with("typingpet."))
+      found = std::find_if(original.begin(), original.end(), [&](const auto &entry) {
+        const auto slash = entry.first.find_last_of('/');
+        return entry.first.substr(slash == std::string::npos ? 0 : slash + 1) == clip.source;
+      });
+    require(found != original.end(), L"原始角色包缺少素材");
+    output[animationResourceName(clip)] = found->second;
+  }
+  const auto manifest = characterManifest(character).dump(2);
+  output["character.json"] = {manifest.begin(), manifest.end()};
+  return output;
 }

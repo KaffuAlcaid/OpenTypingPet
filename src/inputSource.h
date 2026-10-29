@@ -9,8 +9,8 @@ public:
   InputSource();
   ~InputSource();
   std::function<void(const InputEvent &)> input;
-  std::function<void()> sessionChanged;
   bool setEnabled(bool enabled, bool mouse);
+  bool setDevices(bool keyboard, bool mouse);
   void clear();
   void keyEvent(int key, bool down, bool mouse);
 
@@ -19,6 +19,6 @@ private:
   void readInput(HRAWINPUT handle);
   bool held(int generic, int left, int right) const;
   HWND m_window = nullptr;
-  std::set<int> m_pressed, m_unusedModifiers;
-  bool m_enabled = false, m_registered = false, m_mouse = false;
+  std::set<int> m_pressed, m_unusedModifiers, m_suppressed;
+  bool m_enabled = false, m_registered = false, m_keyboard = false, m_mouse = false;
 };

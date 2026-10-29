@@ -14,9 +14,10 @@ public:
   void animationFinished();
   void preview(size_t action);
   void reset();
-  void setTiming(unsigned idle, unsigned hold);
+  void setTiming(unsigned idle, unsigned hold, uint64_t now = GetTickCount64());
   void tick(uint64_t now);
   uint64_t deadline() const;
+  void shiftTime(uint64_t duration);
 
 private:
   void play(size_t action);

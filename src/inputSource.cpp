@@ -1,6 +1,5 @@
 #include "inputSource.h"
 #include <vector>
-#include <wtsapi32.h>
 namespace {
 int modifier(int key) {
   if (key == VK_SHIFT || key == VK_LSHIFT || key == VK_RSHIFT)
@@ -20,43 +19,70 @@ InputSource::InputSource() {
   RegisterClassW(&cls);
   m_window = CreateWindowExW(0, cls.lpszClassName, L"", 0, 0, 0, 0, 0,
                              HWND_MESSAGE, nullptr, cls.hInstance, this);
-  if (m_window)
-    WTSRegisterSessionNotification(m_window, NOTIFY_FOR_THIS_SESSION);
 }
 InputSource::~InputSource() {
   setEnabled(false, false);
   if (m_window) {
-    WTSUnRegisterSessionNotification(m_window);
     DestroyWindow(m_window);
   }
 }
 void InputSource::clear() {
   m_pressed.clear();
   m_unusedModifiers.clear();
+  m_suppressed.clear();
 }
 bool InputSource::setEnabled(bool enabled, bool mouse) {
+  return setDevices(enabled, enabled && mouse);
+}
+bool InputSource::setDevices(bool keyboard, bool mouse) {
   if (!m_window)
     return false;
+  if (m_keyboard == keyboard && m_mouse == mouse && m_enabled == (keyboard || mouse))
+    return true;
+  const bool enablingKeyboard = keyboard && !m_keyboard;
+  const bool enablingMouse = mouse && !m_mouse;
   m_enabled = false;
-  clear();
+  if (!keyboard) {
+    std::erase_if(m_pressed, [](int key) { return key != 1 && key != 2 && key != 4 && key != 5 && key != 6; });
+    m_unusedModifiers.clear();
+  }
+  if (!mouse) for (int key : {1, 2, 4, 5, 6}) m_pressed.erase(key);
+  std::erase_if(m_suppressed, [&](int key) {
+    const bool button = key == 1 || key == 2 || key == 4 || key == 5 || key == 6;
+    return button ? !mouse : !keyboard;
+  });
   if (m_registered) {
-    RAWINPUTDEVICE devices[] = {{1, 6, RIDEV_REMOVE, nullptr},
-                                {1, 2, RIDEV_REMOVE, nullptr}};
-    if (!RegisterRawInputDevices(devices, m_mouse ? 2 : 1,
-                                 sizeof(RAWINPUTDEVICE)))
+    std::vector<RAWINPUTDEVICE> devices;
+    if (m_keyboard) devices.push_back({1, 6, RIDEV_REMOVE, nullptr});
+    if (m_mouse) devices.push_back({1, 2, RIDEV_REMOVE, nullptr});
+    if (!RegisterRawInputDevices(devices.data(), UINT(devices.size()), sizeof(RAWINPUTDEVICE)))
       return false;
   }
   m_registered = false;
+  m_keyboard = false;
   m_mouse = false;
-  if (!enabled)
+  if (!keyboard && !mouse)
     return true;
-  RAWINPUTDEVICE devices[] = {{1, 6, RIDEV_INPUTSINK, m_window},
-                              {1, 2, RIDEV_INPUTSINK, m_window}};
-  if (!RegisterRawInputDevices(devices, mouse ? 2 : 1, sizeof(RAWINPUTDEVICE)))
+  std::vector<RAWINPUTDEVICE> devices;
+  if (keyboard) devices.push_back({1, 6, RIDEV_INPUTSINK, m_window});
+  if (mouse) devices.push_back({1, 2, RIDEV_INPUTSINK, m_window});
+  if (!RegisterRawInputDevices(devices.data(), UINT(devices.size()), sizeof(RAWINPUTDEVICE))) {
+    clear();
     return false;
+  }
   m_enabled = true;
   m_registered = true;
+  m_keyboard = keyboard;
   m_mouse = mouse;
+  if (enablingKeyboard)
+    for (int key : {VK_LSHIFT, VK_RSHIFT, VK_LCONTROL, VK_RCONTROL, VK_LMENU, VK_RMENU})
+      if (GetAsyncKeyState(key) & 0x8000) m_pressed.insert(key);
+  // A held input from a capture or pause must be released before it can trigger again.
+  for (int key = 1; key < 255; ++key) {
+    const bool button = key == 1 || key == 2 || key == 4 || key == 5 || key == 6;
+    if ((button ? enablingMouse : enablingKeyboard) && !modifier(key) && (GetAsyncKeyState(key) & 0x8000))
+      m_suppressed.insert(key);
+  }
   return true;
 }
 bool InputSource::held(int generic, int left, int right) const {
@@ -66,6 +92,10 @@ bool InputSource::held(int generic, int left, int right) const {
 void InputSource::keyEvent(int key, bool down, bool mouse) {
   if (key <= 0 || key >= 255)
     return;
+  if (m_suppressed.contains(key)) {
+    if (!down) m_suppressed.erase(key);
+    return;
+  }
   const int mod = modifier(key);
   const bool repeated = m_pressed.contains(key),
              solo = !down && m_unusedModifiers.contains(key);
@@ -93,17 +123,13 @@ void InputSource::keyEvent(int key, bool down, bool mouse) {
 void InputSource::readInput(HRAWINPUT handle) {
   if (!m_enabled)
     return;
-  UINT size = 0;
-  if (GetRawInputData(handle, RID_INPUT, nullptr, &size,
-                      sizeof(RAWINPUTHEADER)) != 0 ||
-      size < sizeof(RAWINPUTHEADER) || size > 4096)
+  RAWINPUT data{};
+  UINT size = sizeof(data);
+  const auto read = GetRawInputData(handle, RID_INPUT, &data, &size, sizeof(RAWINPUTHEADER));
+  if (read == UINT(-1) || read < sizeof(RAWINPUTHEADER))
     return;
-  std::vector<uint8_t> bytes(size);
-  if (GetRawInputData(handle, RID_INPUT, bytes.data(), &size,
-                      sizeof(RAWINPUTHEADER)) != size)
-    return;
-  const auto *raw = reinterpret_cast<const RAWINPUT *>(bytes.data());
-  if (raw->header.dwType == RIM_TYPEKEYBOARD) {
+  const auto *raw = &data;
+  if (raw->header.dwType == RIM_TYPEKEYBOARD && m_keyboard) {
     const auto &key = raw->data.keyboard;
     int vk = key.VKey;
     if (vk == VK_SHIFT)
@@ -135,11 +161,5 @@ LRESULT CALLBACK InputSource::windowProc(HWND window, UINT message,
   }
   if (self && message == WM_INPUT)
     self->readInput(reinterpret_cast<HRAWINPUT>(lParam));
-  if (self &&
-      (message == WM_WTSSESSION_CHANGE || message == WM_POWERBROADCAST)) {
-    self->clear();
-    if (self->sessionChanged)
-      self->sessionChanged();
-  }
   return DefWindowProcW(window, message, wParam, lParam);
 }

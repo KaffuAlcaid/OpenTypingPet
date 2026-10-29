@@ -1,6 +1,11 @@
 #include "petEngine.h"
 #include <algorithm>
 
+void PetEngine::shiftTime(uint64_t duration) {
+  for (auto *time : {&m_idleAt, &m_specialUntil, &m_specialStarted, &m_lastInput})
+    if (*time) *time += duration;
+}
+
 void PetEngine::setCharacter(std::shared_ptr<CharacterDefinition> character) {
   m_character = std::move(character);
   m_sequence.assign(m_character ? m_character->rules.size() : 0, 0);
@@ -33,7 +38,7 @@ void PetEngine::preview(size_t action) {
   m_special = false;
   play(action);
 }
-void PetEngine::setTiming(unsigned idle, unsigned hold) {
+void PetEngine::setTiming(unsigned idle, unsigned hold, uint64_t now) {
   m_idleDelay = idle;
   m_hold = hold;
   if (m_character && m_specialStarted) {
@@ -42,7 +47,7 @@ void PetEngine::setTiming(unsigned idle, unsigned hold) {
   }
   if (m_idleAt)
     m_idleAt = std::max(m_lastInput + m_idleDelay, m_specialUntil);
-  tick(GetTickCount64());
+  tick(now);
 }
 void PetEngine::activate(size_t action, size_t ruleIndex) {
   const auto now = GetTickCount64();

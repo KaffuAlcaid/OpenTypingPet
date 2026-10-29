@@ -17,10 +17,12 @@ struct AnimationFrame {
   unsigned delay = 200;
 };
 struct AnimationClip {
+  std::string id, source;
   std::wstring label, format;
   unsigned width = 0, height = 0;
   int loops = -1;
   std::vector<AnimationFrame> frames;
+  std::shared_ptr<const AnimationClip> storage;
 };
 enum class InputEventType { KeyDown, KeyUp, MouseDown, MouseUp, Typing };
 struct InputEvent {
@@ -67,7 +69,13 @@ struct CharacterDefinition {
   const AnimationClip &animation(size_t action) const { return clips[actions[action].clip]; }
   int loopCount(size_t action) const { return actions[action].loops.value_or(animation(action).loops); }
 };
+struct ImportDiagnostic {
+  std::wstring file, field, message;
+  size_t line = 0, column = 0;
+};
+struct ImportFailure { std::vector<ImportDiagnostic> diagnostics; };
 struct ImportResult {
   std::shared_ptr<CharacterDefinition> character;
   std::wstring error;
+  std::vector<ImportDiagnostic> diagnostics;
 };

@@ -51,6 +51,10 @@ void Preferences::load() {
   presetPath = readText(key, L"presetPath");
   initialized = readBool(key, L"initialized", !presetPath.empty());
   showSettingsOnStart = readBool(key, L"showSettingsOnStart", false);
+  pauseOnLock = readBool(key, L"pauseOnLock", true);
+  pauseOnDisplayOff = readBool(key, L"pauseOnDisplayOff", true);
+  fullscreenPolicy = std::clamp(readInt(key, L"fullscreenPolicy", 0), 0, 1);
+  fullscreenExceptions = readText(key, L"fullscreenExceptions");
   width = std::clamp(readInt(key, L"width", 280), 100, 800);
   idleDelay = std::clamp(readInt(key, L"idleDelay", 800), 200, 5000);
   minimumHold = std::clamp(readInt(key, L"minimumHold", 0), 0, 500);
@@ -87,6 +91,10 @@ void Preferences::save() const {
   writeText(key, L"presetPath", presetPath);
   writeText(key, L"initialized", initialized ? L"true" : L"false");
   writeText(key, L"showSettingsOnStart", showSettingsOnStart ? L"true" : L"false");
+  writeText(key, L"pauseOnLock", pauseOnLock ? L"true" : L"false");
+  writeText(key, L"pauseOnDisplayOff", pauseOnDisplayOff ? L"true" : L"false");
+  writeInt(key, L"fullscreenPolicy", fullscreenPolicy);
+  writeText(key, L"fullscreenExceptions", fullscreenExceptions);
   writeInt(key, L"width", width);
   writeInt(key, L"idleDelay", idleDelay);
   writeInt(key, L"minimumHold", minimumHold);
