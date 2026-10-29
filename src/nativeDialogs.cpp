@@ -81,7 +81,7 @@ struct Dialog {
     const auto list = GetDlgItem(window, 5000); SendMessageW(list, LB_RESETCONTENT, 0, 0);
     for (size_t i = 0; i < sequence.size(); ++i) {
       const auto found = std::find(fields[0].choiceValues.begin(), fields[0].choiceValues.end(), sequence[i]);
-      const auto label = std::to_wstring(i + 1) + L" · " + (found == fields[0].choiceValues.end() ? sequence[i] : fields[0].choices[size_t(found - fields[0].choiceValues.begin())]);
+      const auto label = std::to_wstring(i + 1) + L". " + (found == fields[0].choiceValues.end() ? sequence[i] : fields[0].choices[size_t(found - fields[0].choiceValues.begin())]);
       SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
     }
     SendMessageW(list, LB_SETCURSEL, std::clamp(selected, 0, std::max(0, int(sequence.size()) - 1)), 0);

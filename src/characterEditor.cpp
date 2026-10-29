@@ -321,7 +321,15 @@ public:
       SetBkMode(dc,TRANSPARENT);SetTextColor(dc,self->colors.text);SelectObject(dc,self->font);
       auto text=[&](std::wstring value,RECT rect,UINT flags=DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS){DrawTextW(dc,value.c_str(),int(value.size()),&rect,flags);};
       if(self->page==0){text(L"角色名称",{self->px(20),self->px(90),self->px(280),self->px(120)});text(Storage::wide(self->state.document.value("name",std::string())),{self->px(20),self->px(126),self->px(280),self->px(162)});text(L"角色标识",{self->px(20),self->px(186),self->px(280),self->px(218)});text(Storage::wide(self->state.document.value("id",std::string())),{self->px(20),self->px(222),self->px(280),self->px(264)});text(L"画布："+std::to_wstring(self->state.document["canvas"].value("width",500))+L" × "+std::to_wstring(self->state.document["canvas"].value("height",500)),{self->px(20),self->px(292),self->px(280),self->px(332)});}
-      if(self->preview&&!self->preview->clips.empty()){Gdiplus::Graphics graphics(dc);const auto &clip=self->preview->clips[self->clipIndex];paintAnimationFrame(graphics,{self->px(310),self->px(126),area.right-self->px(350),area.bottom-self->px(320)},clip,self->frame,true);text(L"第 "+std::to_wstring(self->frame+1)+L" / "+std::to_wstring(clip.frames.size())+L" 帧 · "+std::to_wstring(clip.frames[self->frame].delay)+L" ms",{self->px(310),area.bottom-self->px(184),area.right-self->px(30),area.bottom-self->px(154)},DT_CENTER|DT_VCENTER|DT_SINGLELINE);}
+      if(self->preview&&!self->preview->clips.empty()){
+        const auto &clip=self->preview->clips[self->clipIndex];
+        {Gdiplus::Graphics graphics(dc);paintAnimationFrame(graphics,{self->px(310),self->px(126),area.right-self->px(350),area.bottom-self->px(320)},clip,self->frame,true);}
+        const int middle=self->px(310)+(area.right-self->px(350))/2;
+        text(L"第 "+std::to_wstring(self->frame+1)+L" 帧，共 "+std::to_wstring(clip.frames.size())+L" 帧",
+             {self->px(310),area.bottom-self->px(184),middle-self->px(8),area.bottom-self->px(154)});
+        text(L"本帧时长："+std::to_wstring(clip.frames[self->frame].delay)+L" 毫秒",
+             {middle+self->px(8),area.bottom-self->px(184),area.right-self->px(30),area.bottom-self->px(154)},DT_RIGHT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS);
+      }
       SetTextColor(dc,self->colors.muted);text(self->message.empty()?(self->dirty?L"有未应用的修改":L"就绪"):self->message,{self->px(20),area.bottom-self->px(32),area.right-self->px(20),area.bottom});if(message==WM_PAINT)EndPaint(window,&paint);return 0;}
     case WM_DRAWITEM:{const auto &draw=*reinterpret_cast<DRAWITEMSTRUCT*>(lParam);RECT rect=draw.rcItem;const bool selected=(draw.itemState&ODS_SELECTED)||(draw.CtlID>=PageRole&&draw.CtlID<=PageRules&&draw.CtlID-PageRole==unsigned(self->page));HBRUSH fill=CreateSolidBrush(selected?self->colors.selection:self->colors.button);FillRect(draw.hDC,&rect,fill);DeleteObject(fill);SelectObject(draw.hDC,self->font);SetBkMode(draw.hDC,TRANSPARENT);SetTextColor(draw.hDC,draw.itemState&ODS_DISABLED?self->colors.muted:self->colors.text);wchar_t label[256]{};
       if(draw.CtlType==ODT_LISTBOX){if(draw.itemID==UINT(-1))return TRUE;SendMessageW(draw.hwndItem,LB_GETTEXT,draw.itemID,reinterpret_cast<LPARAM>(label));rect.left+=self->px(10);}

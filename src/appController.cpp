@@ -85,6 +85,7 @@ enum : unsigned {
 constexpr UINT Imported = WM_APP + 1, TrayEvent = WM_APP + 2, RemovePetMessage = WM_APP + 5;
 constexpr UINT_PTR AnimationTimer = 1, EnvironmentTimer = 2, EnvironmentDebounceTimer = 3;
 constexpr unsigned SelectPetMenu = 2000;
+constexpr int SidebarWidth = 176;
 Gdiplus::Color color(COLORREF value, BYTE alpha = 255) {
   return Gdiplus::Color(alpha, GetRValue(value), GetGValue(value),
                         GetBValue(value));
@@ -110,6 +111,24 @@ void setControlText(HWND window, const std::wstring &value) {
   GetWindowTextW(window, current.data(), length + 1);
   current.resize(size_t(length));
   if (current != value) SetWindowTextW(window, value.c_str());
+}
+std::wstring describeTrigger(const InputRule &rule) {
+  if (rule.event == InputEventType::Typing) return L"普通打字";
+  std::wstring key;
+  switch (rule.key) {
+  case VK_LBUTTON: key = L"鼠标左键"; break;
+  case VK_RBUTTON: key = L"鼠标右键"; break;
+  case VK_MBUTTON: key = L"鼠标中键"; break;
+  case VK_XBUTTON1: key = L"鼠标侧键 1"; break;
+  case VK_XBUTTON2: key = L"鼠标侧键 2"; break;
+  default: key = Storage::wide(inputKeyName(rule.key)); break;
+  }
+  const auto combination = std::wstring(rule.ctrl ? L"Ctrl+" : L"") +
+      (rule.shift ? L"Shift+" : L"") + (rule.alt ? L"Alt+" : L"") + key;
+  if (rule.modifierTap) return L"单独按下并松开 " + combination;
+  if (rule.event == InputEventType::KeyUp || rule.event == InputEventType::MouseUp)
+    return L"松开 " + combination;
+  return L"按 " + combination;
 }
 std::shared_ptr<Gdiplus::Bitmap> resourceImage(HINSTANCE instance, int id) {
   const auto resource =
@@ -295,7 +314,7 @@ void AppController::layout() {
   RECT rect{};
   GetClientRect(m_settingsWindow, &rect);
   const int w = MulDiv(rect.right, 96, m_dpi), h = MulDiv(rect.bottom, 96, m_dpi);
-  const int left = 176, right = w - 288, span = right - left, preview = w - 264;
+  const int left = SidebarWidth + 24, right = w - 288, span = right - left, preview = w - 264;
   auto place = [&](unsigned id, int x, int y, int width, int height) {
     const RECT bounds{px(x), px(y), px(x + width), px(y + height)};
     const auto previous = m_controlBounds.find(id);
@@ -307,10 +326,10 @@ void AppController::layout() {
   place(Open, w - 202, 22, 136, 34);
   place(Pause, w - 58, 22, 34, 34);
   const unsigned tabs[] = {TabLibrary, TabPet, TabActions, TabApp};
-  for (int i = 0; i < 4; ++i) place(tabs[i], 12, 92 + i * 48, 128, 40);
-  place(PetSelector, 12, 326, 128, 200);
-  place(PauseAll, 12, h - 130, 128, 34);
-  place(ClosePet, 12, h - 86, 128, 34);
+  for (int i = 0; i < 4; ++i) place(tabs[i], 12, 92 + i * 48, SidebarWidth - 24, 40);
+  place(PetSelector, 12, 326, SidebarWidth - 24, 200);
+  place(PauseAll, 12, h - 130, SidebarWidth - 24, 34);
+  place(ClosePet, 12, h - 86, SidebarWidth - 24, 34);
   const int half = (span - 12) / 2;
   place(Topmost, left, 132, half, 34);
   place(Visible, left + half + 12, 132, half, 34);
@@ -346,12 +365,12 @@ void AppController::layout() {
   place(HideFullscreen, left, 418, w - left - 24, 34);
   place(FullscreenExceptions, left, 466, 132, 34);
   for (int i = 0; i < 3; ++i)
-    place(PreviewChecker + i, preview + 52 + i * 36, 430, 28, 28);
-  place(PreviewTimeline, preview, 466, 224, 28);
-  place(PreviewPrevious, preview, 502, 32, 32);
-  place(PreviewPlay, preview + 38, 502, 32, 32);
-  place(PreviewNext, preview + 76, 502, 32, 32);
-  place(PreviewSpeed, preview + 124, 502, 100, 180);
+    place(PreviewChecker + i, preview + 52 + i * 36, 464, 28, 28);
+  place(PreviewTimeline, preview, 498, 224, 24);
+  place(PreviewPrevious, preview, 528, 32, 32);
+  place(PreviewPlay, preview + 38, 528, 32, 32);
+  place(PreviewNext, preview + 76, 528, 32, 32);
+  place(PreviewSpeed, preview + 124, 528, 100, 180);
   place(LibraryList, left, 94, span, h - 218);
   if (SendMessageW(m_controls[LibraryList], LB_GETITEMHEIGHT, 0, 0) != px(72))
     SendMessageW(m_controls[LibraryList], LB_SETITEMHEIGHT, 0, px(72));
@@ -427,7 +446,7 @@ void AppController::syncControls(unsigned changed) {
       InvalidateRect(window, nullptr, FALSE);
   updateControlVisibility();
   m_syncing = false;
-  RECT content{}; GetClientRect(m_settingsWindow, &content); content.left = px(152);
+  RECT content{}; GetClientRect(m_settingsWindow, &content); content.left = px(SidebarWidth);
   if (changed) content.top = content.bottom - px(32);
   InvalidateRect(m_settingsWindow, &content, FALSE);
 }
@@ -515,15 +534,15 @@ void AppController::paintSettings(HDC dc) {
   RECT client{};
   GetClientRect(m_settingsWindow, &client);
   const int w = client.right, h = client.bottom;
-  const int left = px(176), right = w - px(288);
+  const int left = px(SidebarWidth + 24), right = w - px(288);
   fill(dc, client, m_colors.window);
-  fill(dc, {0, 0, px(152), h}, m_colors.panel);
-  fill(dc, {px(151), 0, px(152), h}, m_colors.border);
-  fill(dc, {px(152), h - px(32), w, h}, m_colors.base);
-  fill(dc, {px(152), h - px(33), w, h - px(32)}, m_colors.border);
+  fill(dc, {0, 0, px(SidebarWidth), h}, m_colors.panel);
+  fill(dc, {px(SidebarWidth - 1), 0, px(SidebarWidth), h}, m_colors.border);
+  fill(dc, {px(SidebarWidth), h - px(32), w, h}, m_colors.base);
+  fill(dc, {px(SidebarWidth), h - px(33), w, h - px(32)}, m_colors.border);
   Gdiplus::Graphics graphics(dc);
   icon(graphics, PNG_PAW, {px(16), px(24), px(24), px(24)}, m_colors.accent);
-  text(dc, L"OpenTypingPet", {px(14), px(52), px(142), px(76)}, m_font, m_colors.text);
+  text(dc, L"OpenTypingPet", {px(14), px(52), px(SidebarWidth - 10), px(76)}, m_font, m_colors.text);
   const wchar_t *titles[] = {L"桌宠", L"动作", L"应用", L"角色库"};
   text(dc, titles[m_tab], {left, px(20), w - px(220), px(60)}, m_titleFont, m_colors.text);
   const auto character = engine().character();
@@ -553,20 +572,25 @@ void AppController::paintSettings(HDC dc) {
     text(dc, L"启动", {left, px(166), w - px(24), px(194)}, m_font, m_colors.muted);
     fill(dc, {left, px(290), w - px(24), px(291)}, m_colors.border);
     text(dc, L"自动暂停", {left, px(298), w - px(24), px(326)}, m_font, m_colors.muted);
-    text(dc, L"OpenTypingPet 0.1.0 · KaffuAlcaid · GPLv3", {left, px(518), w - px(24), px(546)}, m_font, m_colors.muted);
+    const int detailsColumn = left + (w - px(24) - left) / 2;
+    text(dc, L"OpenTypingPet 0.1.0", {left, px(512), w - px(24), px(536)}, m_font, m_colors.text);
+    text(dc, L"作者：KaffuAlcaid", {left, px(536), detailsColumn - px(12), px(560)}, m_font, m_colors.muted);
+    text(dc, L"许可证：GPL-3.0-only", {detailsColumn, px(536), w - px(24), px(560)}, m_font, m_colors.muted);
   } else if (m_selectedLibrary >= 0 && size_t(m_selectedLibrary) < m_library->entries.size()) {
     auto &entry = m_library->entries[m_selectedLibrary];
     const int preview = w - px(264);
     if (const auto thumbnail = m_library->thumbnail(entry)) graphics.DrawImage(thumbnail.get(), preview + px(48), px(104), px(128), px(128));
     text(dc, entry.name, {preview, px(244), w - px(40), px(280)}, m_headingFont, m_colors.text);
-    text(dc, std::to_wstring(entry.actionCount) + L" 个动作 · " + std::to_wstring((entry.bytes + 1023) / 1024) + L" KB",
-         {preview, px(284), w - px(40), px(314)}, m_font, m_colors.muted);
+    text(dc, L"动作数量：" + std::to_wstring(entry.actionCount),
+         {preview, px(284), w - px(40), px(308)}, m_font, m_colors.muted);
+    text(dc, L"角色包大小：" + std::to_wstring((entry.bytes + 1023) / 1024) + L" KiB",
+         {preview, px(308), w - px(40), px(332)}, m_font, m_colors.muted);
     text(dc, entry.currentHash == entry.sourceHash ? L"原始角色包" : L"已编辑",
-         {preview, px(320), w - px(40), px(348)}, m_font, m_colors.muted);
+         {preview, px(338), w - px(40), px(362)}, m_font, m_colors.muted);
   } else if (m_tab == 3) {
     text(dc, L"角色库为空", {left, px(106), right, px(142)}, m_headingFont, m_colors.muted);
   }
-  text(dc, L"当前桌宠", {px(14), px(294), px(140), px(322)}, m_font, m_colors.muted);
+  text(dc, L"当前桌宠", {px(14), px(294), px(SidebarWidth - 12), px(322)}, m_font, m_colors.muted);
   if (m_tab == 0 || m_tab == 1)
     paintPreview(dc);
   const std::wstring status = m_busy ? L"正在导入" : !m_error.empty() ? m_error : currentPet().paused() ? L"已暂停" : character ? L"运行中" : L"就绪";
@@ -605,10 +629,11 @@ void AppController::paintPreview(HDC dc) {
             clip, m_tab == 1 ? m_previewFrame : currentPet().frame(), petSettings().smooth);
   text(dc, character->actions[action].label, {left, px(368), right, px(398)},
        m_headingFont, m_colors.text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-  const auto info = clip.format + L" · " + std::to_wstring(clip.width) + L" × " +
-                    std::to_wstring(clip.height) + L" · " + std::to_wstring(clip.frames.size()) + L" 帧";
-  text(dc, info, {left, px(398), right, px(422)}, m_font, m_colors.muted,
-       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  text(dc, L"格式：" + clip.format, {left, px(398), right, px(418)}, m_font, m_colors.muted);
+  text(dc, L"尺寸：" + std::to_wstring(clip.width) + L" × " + std::to_wstring(clip.height) + L" 像素",
+       {left, px(418), right, px(438)}, m_font, m_colors.muted);
+  text(dc, L"帧数：" + std::to_wstring(clip.frames.size()),
+       {left, px(438), right, px(458)}, m_font, m_colors.muted);
 }
 void AppController::invalidatePreview() {
   RECT rect{};
@@ -755,13 +780,13 @@ void AppController::paintAction(const DRAWITEMSTRUCT &draw) {
   std::wstring trigger;
   for (const auto &rule : character->rules)
     if (std::find(rule.actions.begin(), rule.actions.end(), action.id) != rule.actions.end()) {
-      if (!trigger.empty()) trigger += L" · ";
-      trigger += rule.label;
+      if (!trigger.empty()) trigger += L" 或";
+      trigger += describeTrigger(rule);
     }
   if (trigger.empty())
     trigger = action.id == character->defaultAction ? L"默认动作" : L"动作结束后触发";
-  else if (trigger == action.label)
-    trigger = clip.format + L" · " + std::to_wstring(clip.frames.size()) + L" 帧";
+  else
+    trigger += trigger.back() < 128 ? L" 时触发" : L"时触发";
   label.top = draw.rcItem.top + px(32);
   label.bottom = draw.rcItem.bottom - px(5);
   text(draw.hDC, trigger, label, m_font, m_colors.muted);
@@ -974,7 +999,7 @@ void AppController::refreshInstances() {
   SendMessageW(m_controls[PetSelector], CB_RESETCONTENT, 0, 0);
   for (size_t i = 0; i < m_pets.size(); ++i) {
     const auto *entry = m_library->find(m_pets[i]->record.libraryId);
-    const auto label = std::to_wstring(i + 1) + L" · " + (entry ? entry->name : L"尚未选择角色");
+    const auto label = std::to_wstring(i + 1) + L" 号：" + (entry ? entry->name : L"尚未选择角色");
     SendMessageW(m_controls[PetSelector], CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
   }
   SendMessageW(m_controls[PetSelector], CB_SETCURSEL, m_activePet, 0);
@@ -982,7 +1007,7 @@ void AppController::refreshInstances() {
   int selected = 0;
   const auto &monitors = m_environment.monitors();
   for (size_t i = 0; i < monitors.size(); ++i) {
-    const auto label = std::to_wstring(i + 1) + L" · " + monitors[i].name;
+    const auto label = L"显示器 " + std::to_wstring(i + 1) + L"（" + monitors[i].name + L"）";
     SendMessageW(m_controls[MonitorSelector], CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
     if (monitors[i].id == currentPet().record.placement.monitor) selected = int(i);
   }
@@ -1013,20 +1038,20 @@ void AppController::paintLibraryEntry(const DRAWITEMSTRUCT &draw) {
   text(draw.hDC, entry.name, label, m_font, m_colors.text);
   const auto count = std::count_if(m_pets.begin(), m_pets.end(), [&](const auto &pet) { return pet->record.libraryId == entry.libraryId; });
   label.top += px(28); label.bottom += px(28);
-  text(draw.hDC, std::to_wstring(entry.actionCount) + L" 个动作" + (count ? L" · 桌面 " + std::to_wstring(count) + L" 个" : L""),
+  text(draw.hDC, std::to_wstring(entry.actionCount) + L" 个动作" + (count ? L"，已添加 " + std::to_wstring(count) + L" 个桌宠" : L""),
        label, m_font, m_colors.muted);
 }
 void AppController::showDiagnostics() {
   std::wstring details;
   for (const auto &issue : m_diagnostics) {
     if (!details.empty()) details += L"\r\n\r\n";
-    details += issue.file;
-    if (issue.line) details += L" · 第 " + std::to_wstring(issue.line) + L" 行，第 " + std::to_wstring(issue.column) + L" 列";
+    details += L"文件：" + issue.file;
+    if (issue.line) details += L"\r\n位置：第 " + std::to_wstring(issue.line) + L" 行，第 " + std::to_wstring(issue.column) + L" 列";
     if (!issue.field.empty()) details += L"\r\n字段：" + issue.field;
     details += L"\r\n" + issue.message;
   }
   if (details.empty()) details = m_error;
-  if (m_failedImport) details = L"文件：" + m_failedImport->path + L"\r\n\r\n" + details;
+  if (m_failedImport) details = L"角色包：" + m_failedImport->path + L"\r\n\r\n" + details;
   showDetails(m_settingsWindow, L"问题详情", details, m_colors);
 }
 void AppController::editCharacter() {
@@ -1305,7 +1330,7 @@ HMENU AppController::createMenu() {
   if (m_pets.size() > 1) {
     for (size_t i = 0; i < m_pets.size(); ++i) {
       const auto *entry = m_library->find(m_pets[i]->record.libraryId);
-      m_menuItems.push_back({SelectPetMenu + unsigned(i), std::to_wstring(i + 1) + L" · " + (entry ? entry->name : L"桌宠"), 0, i == m_activePet});
+      m_menuItems.push_back({SelectPetMenu + unsigned(i), std::to_wstring(i + 1) + L" 号：" + (entry ? entry->name : L"桌宠"), 0, i == m_activePet});
     }
     m_menuItems.push_back({0, L""});
   }
@@ -1513,7 +1538,7 @@ void AppController::command(unsigned id, unsigned notification) {
     } else
       m_error = L"无法更新登录启动设置。";
     InvalidateRect(m_controls[id], nullptr, FALSE);
-    RECT footer{}; GetClientRect(m_settingsWindow, &footer); footer.left = px(152); footer.top = footer.bottom - px(32);
+    RECT footer{}; GetClientRect(m_settingsWindow, &footer); footer.left = px(SidebarWidth); footer.top = footer.bottom - px(32);
     InvalidateRect(m_settingsWindow, &footer, FALSE);
     return;
   }
