@@ -9,8 +9,8 @@ PNG_RESET RCDATA "../assets/rotate-ccw.png"
 PNG_SETTINGS RCDATA "../assets/settings.png"
 PNG_CLOSE RCDATA "../assets/x.png"
 1 VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
  FILEOS VOS_NT_WINDOWS32
  FILETYPE VFT_APP
 BEGIN
@@ -19,10 +19,10 @@ BEGIN
   BLOCK "040904b0"
   BEGIN
    VALUE "FileDescription", "OpenTypingPet"
-   VALUE "FileVersion", "0.1.0"
+   VALUE "FileVersion", "1.0.0"
    VALUE "LegalCopyright", "Copyright (c) 2026 KaffuAlcaid"
    VALUE "ProductName", "OpenTypingPet"
-   VALUE "ProductVersion", "0.1.0"
+   VALUE "ProductVersion", "1.0.0"
   END
  END
  BLOCK "VarFileInfo"

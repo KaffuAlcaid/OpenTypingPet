@@ -573,7 +573,7 @@ void AppController::paintSettings(HDC dc) {
     fill(dc, {left, px(290), w - px(24), px(291)}, m_colors.border);
     text(dc, L"自动暂停", {left, px(298), w - px(24), px(326)}, m_font, m_colors.muted);
     const int detailsColumn = left + (w - px(24) - left) / 2;
-    text(dc, L"OpenTypingPet 0.1.0", {left, px(512), w - px(24), px(536)}, m_font, m_colors.text);
+    text(dc, L"OpenTypingPet 1.0.0", {left, px(512), w - px(24), px(536)}, m_font, m_colors.text);
     text(dc, L"作者：KaffuAlcaid", {left, px(536), detailsColumn - px(12), px(560)}, m_font, m_colors.muted);
     text(dc, L"许可证：GPL-3.0-only", {detailsColumn, px(536), w - px(24), px(560)}, m_font, m_colors.muted);
   } else if (m_selectedLibrary >= 0 && size_t(m_selectedLibrary) < m_library->entries.size()) {

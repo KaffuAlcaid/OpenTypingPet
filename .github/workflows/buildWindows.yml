@@ -1,0 +1,91 @@
+name: Release OpenTypingPet
+run-name: Release OpenTypingPet (${{ inputs.tag }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Git tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --target OpenTypingPet --parallel
+
+      - name: Verify release version
+        id: executable
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $file = Get-Item -LiteralPath build/bin/Release/OpenTypingPet.exe
+          $expected = $env:RELEASE_TAG -replace '^v', ''
+          if ($file.VersionInfo.ProductVersion -ne $expected) {
+            throw 'The executable version does not match the release tag'
+          }
+          $digest = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "sha256=$digest" | Add-Content -LiteralPath $env:GITHUB_OUTPUT
+
+      - name: Upload executable
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: OpenTypingPet.exe
+          path: build/bin/Release/OpenTypingPet.exe
+          archive: false
+          if-no-files-found: error
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          EXECUTABLE_SHA256: ${{ steps.executable.outputs.sha256 }}
+        run: |
+          $notes = @'
+          Windows x64 免安装版
+
+          下载 `OpenTypingPet.exe` 后直接运行，使用说明与素材来源见 [README](https://github.com/{0}/blob/{1}/README.md)
+
+          SHA-256：`{2}`
+          '@ -f $env:GH_REPO, $env:RELEASE_TAG, $env:EXECUTABLE_SHA256
+          $notesPath = Join-Path $env:RUNNER_TEMP 'releaseNotes.md'
+          Set-Content -LiteralPath $notesPath -Value $notes -Encoding utf8
+
+          $existing = gh release view $env:RELEASE_TAG --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) {
+              throw 'This version has already been published'
+            }
+            gh release upload $env:RELEASE_TAG build/bin/Release/OpenTypingPet.exe --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to upload the release executable' }
+            gh release edit $env:RELEASE_TAG --title "OpenTypingPet $env:RELEASE_TAG" --notes-file $notesPath
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update release notes' }
+          } else {
+            gh release create $env:RELEASE_TAG build/bin/Release/OpenTypingPet.exe --verify-tag --title "OpenTypingPet $env:RELEASE_TAG" --notes-file $notesPath --draft
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create the release draft' }
+          }
+          gh release edit $env:RELEASE_TAG --draft=false --latest --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the release' }
